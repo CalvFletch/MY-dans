@@ -183,4 +183,18 @@ class BackgroundUpdater {
     final s = prefs.getString(_lastRunKey);
     return s != null ? DateTime.tryParse(s) : null;
   }
+
+  /// Estimate how many cached products have ≥N reviews
+  static Future<int> estimateProductCount(int threshold) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cacheRaw = prefs.getString('product_cache') ?? '{}';
+    final Map<String, dynamic> cache = json.decode(cacheRaw) as Map<String, dynamic>;
+    int count = 0;
+    for (final entry in cache.values) {
+      final p = entry as Map<String, dynamic>;
+      final reviews = p['totalReviewCount'] as int? ?? 0;
+      if (reviews >= threshold) count++;
+    }
+    return count;
+  }
 }

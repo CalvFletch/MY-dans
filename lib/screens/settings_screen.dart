@@ -41,11 +41,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadDailyInfo() async {
     final t = await BackgroundUpdater.getReviewThreshold();
     final last = await BackgroundUpdater.getLastRun();
+    final count = await BackgroundUpdater.estimateProductCount(t);
     setState(() {
       _reviewThreshold = t;
       _lastDailyRun = last;
+      _estimatedCount = count;
     });
   }
+
+  int _estimatedCount = 0;
 
   Future<void> _loadStore() async {
     final id = await CacheService.getStoreNo();
@@ -237,11 +241,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     value: _reviewThreshold.toDouble(),
                     min: 50, max: 1000, divisions: 19,
                     label: '$_reviewThreshold',
-                    onChanged: (v) => setState(() => _reviewThreshold = v.round()),
+                    onChanged: (v) async {
+                      setState(() => _reviewThreshold = v.round());
+                      final count = await BackgroundUpdater.estimateProductCount(v.round());
+                      setState(() => _estimatedCount = count);
+                    },
                     onChangeEnd: (v) => BackgroundUpdater.setReviewThreshold(v.round()),
                   ),
                   Text(
-                    'Products with ≥$_reviewThreshold reviews get daily price & stock updates.',
+                    '~$_estimatedCount products with ≥$_reviewThreshold reviews checked daily',
                     style: TextStyle(color: Colors.grey[500], fontSize: 12),
                   ),
                   const SizedBox(height: 8),
