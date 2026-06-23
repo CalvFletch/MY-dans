@@ -5,6 +5,7 @@ import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/cache_service.dart';
 import 'services/search_service.dart';
+import 'services/background_service.dart';
 
 // Brand colors
 class AppColors {
@@ -33,6 +34,7 @@ void main() async {
   };
 
   await SearchService.init();
+  BackgroundUpdater.checkAndRun(); // non-blocking daily update
   runApp(const MyDansApp());
 }
 

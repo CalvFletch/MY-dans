@@ -4,6 +4,7 @@ import '../main.dart';
 import '../services/api_service.dart';
 import '../services/cache_service.dart';
 import '../services/search_service.dart';
+import '../services/background_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   final bool darkMode;
@@ -26,12 +27,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Map<String, dynamic>> _stores = [];
   bool _loading = false;
   Timer? _debounce;
+  int _reviewThreshold = 300;
+  DateTime? _lastDailyRun;
 
   @override
   void initState() {
     super.initState();
     _loadStore();
+    _loadDailyInfo();
     _searchController.addListener(_onSearchChanged);
+  }
+
+  Future<void> _loadDailyInfo() async {
+    final t = await BackgroundUpdater.getReviewThreshold();
+    final last = await BackgroundUpdater.getLastRun();
+    setState(() {
+      _reviewThreshold = t;
+      _lastDailyRun = last;
+    });
   }
 
   Future<void> _loadStore() async {
@@ -206,6 +219,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             value: widget.darkMode,
             onChanged: widget.onToggleDarkMode,
+          ),
+          const SizedBox(height: 28),
+          _sectionHeader('Daily Update', Icons.update),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Text('Popular item threshold: '),
+                    Text('$_reviewThreshold reviews', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ]),
+                  Slider(
+                    value: _reviewThreshold.toDouble(),
+                    min: 50, max: 1000, divisions: 19,
+                    label: '$_reviewThreshold',
+                    onChanged: (v) => setState(() => _reviewThreshold = v.round()),
+                    onChangeEnd: (v) => BackgroundUpdater.setReviewThreshold(v.round()),
+                  ),
+                  Text(
+                    'Products with ≥$_reviewThreshold reviews get daily price & stock updates.',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _lastDailyRun != null
+                        ? 'Last update: ${_lastDailyRun!.toString().substring(0, 16)}'
+                        : 'No update run yet',
+                    style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 28),
           _sectionHeader('About', Icons.info_outline),
