@@ -1,5 +1,3 @@
-# MY Dan's
-
 ![MY Dan's](assets/git_banner.png)
 
 # A staff tool for Dan Murphys.
