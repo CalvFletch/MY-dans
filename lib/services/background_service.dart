@@ -38,7 +38,11 @@ class BackgroundUpdater {
     }
   }
 
-  static Future<void> _runUpdate(int threshold, String storeNo, SharedPreferences prefs) async {
+  static Future<void> _runUpdate(
+    int threshold,
+    String storeNo,
+    SharedPreferences prefs,
+  ) async {
     final headers = {
       'Ocp-Apim-Subscription-Key': 'REDACTED3b914654a250e79d62250776',
       'User-Agent': 'DanMurphy/10.1.1',
@@ -47,7 +51,8 @@ class BackgroundUpdater {
 
     // Load existing cache
     final cacheRaw = prefs.getString('product_cache') ?? '{}';
-    final Map<String, dynamic> cache = json.decode(cacheRaw) as Map<String, dynamic>;
+    final Map<String, dynamic> cache =
+        json.decode(cacheRaw) as Map<String, dynamic>;
     print('[DAILY] Existing cache: ${cache.length} products');
 
     // Step 1: Fetch current catalog codes
@@ -55,7 +60,9 @@ class BackgroundUpdater {
     for (var page = 1; page <= 80; page++) {
       try {
         final r = await http.post(
-          Uri.parse('https://apiservices.danmurphys.com.au/cmpt/api/v2/AdvertisedOffers/Products'),
+          Uri.parse(
+            'https://apiservices.danmurphys.com.au/cmpt/api/v2/AdvertisedOffers/Products',
+          ),
           headers: headers,
           body: json.encode({'PageNumber': page, 'PageSize': 50}),
         );
@@ -67,7 +74,9 @@ class BackgroundUpdater {
           currentCodes.add((p['id'] ?? '').toString());
         }
         await Future.delayed(const Duration(milliseconds: 200));
-      } catch (_) { break; }
+      } catch (_) {
+        break;
+      }
     }
     print('[DAILY] Catalog: ${currentCodes.length} codes');
 
@@ -90,7 +99,9 @@ class BackgroundUpdater {
     for (final code in toFetch) {
       try {
         final r = await http.get(
-          Uri.parse('https://api.danmurphys.com.au/apis/ui/Product/$code?StoreNo=$storeNo'),
+          Uri.parse(
+            'https://api.danmurphys.com.au/apis/ui/Product/$code?StoreNo=$storeNo',
+          ),
           headers: headers,
         );
         if (r.statusCode == 200) {
@@ -98,23 +109,31 @@ class BackgroundUpdater {
           final products = data['Products'] as List<dynamic>?;
           if (products != null && products.isNotEmpty) {
             final p = products[0] as Map<String, dynamic>;
-            final additionalDetails = (p['AdditionalDetails'] as List<dynamic>?) ?? [];
-            String ad(String n) => (additionalDetails.firstWhere((d) => d['Name'] == n, orElse: () => {'Value': ''})['Value'] ?? '').toString();
+            final additionalDetails =
+                (p['AdditionalDetails'] as List<dynamic>?) ?? [];
+            String ad(String n) =>
+                (additionalDetails.firstWhere(
+                          (d) => d['Name'] == n,
+                          orElse: () => {'Value': ''},
+                        )['Value'] ??
+                        '')
+                    .toString();
 
             final priceMap = p['Prices'] as Map<String, dynamic>? ?? {};
             final prices = <Map<String, dynamic>>[];
             for (final entry in priceMap.entries) {
               final pd = entry.value as Map<String, dynamic>?;
-              if (pd != null) prices.add({
-                'type': entry.key,
-                'message': '${pd['Message'] ?? ''}',
-                'value': (pd['Value'] ?? 0).toDouble(),
-                'preText': '${pd['PreText'] ?? ''}',
-                'isMemberOffer': pd['IsMemberOffer'] == true,
-                'packType': '${pd['PackType'] ?? ''}',
-                'beforePromotion': (pd['BeforePromotion'] ?? 0).toDouble(),
-                'afterPromotion': (pd['AfterPromotion'] ?? 0).toDouble(),
-              });
+              if (pd != null)
+                prices.add({
+                  'type': entry.key,
+                  'message': '${pd['Message'] ?? ''}',
+                  'value': (pd['Value'] ?? 0).toDouble(),
+                  'preText': '${pd['PreText'] ?? ''}',
+                  'isMemberOffer': pd['IsMemberOffer'] == true,
+                  'packType': '${pd['PackType'] ?? ''}',
+                  'beforePromotion': (pd['BeforePromotion'] ?? 0).toDouble(),
+                  'afterPromotion': (pd['AfterPromotion'] ?? 0).toDouble(),
+                });
             }
 
             final existing = cache[code] as Map<String, dynamic>?;
@@ -142,9 +161,14 @@ class BackgroundUpdater {
               'largeImageUrl': '',
               'stockOnHand': p['StockOnHand'] ?? 0,
               'isPurchasable': p['IsPurchasable'] == true,
-              'categories': ((p['Categories'] as List<dynamic>?)?.map((c) => '${c['Name'] ?? ''}').toList() ?? []),
+              'categories':
+                  ((p['Categories'] as List<dynamic>?)
+                      ?.map((c) => '${c['Name'] ?? ''}')
+                      .toList() ??
+                  []),
               'prices': prices,
-              'firstSeen': existing?['firstSeen'] ?? DateTime.now().toIso8601String(),
+              'firstSeen':
+                  existing?['firstSeen'] ?? DateTime.now().toIso8601String(),
               'lastUpdated': DateTime.now().toIso8601String(),
             };
             fetched++;
@@ -188,7 +212,8 @@ class BackgroundUpdater {
   static Future<int> estimateProductCount(int threshold) async {
     final prefs = await SharedPreferences.getInstance();
     final cacheRaw = prefs.getString('product_cache') ?? '{}';
-    final Map<String, dynamic> cache = json.decode(cacheRaw) as Map<String, dynamic>;
+    final Map<String, dynamic> cache =
+        json.decode(cacheRaw) as Map<String, dynamic>;
     int count = 0;
     for (final entry in cache.values) {
       final p = entry as Map<String, dynamic>;

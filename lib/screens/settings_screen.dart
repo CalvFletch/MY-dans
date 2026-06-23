@@ -233,20 +233,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(children: [
-                    const Text('Popular item threshold: '),
-                    Text('$_reviewThreshold reviews', style: const TextStyle(fontWeight: FontWeight.w600)),
-                  ]),
+                  Row(
+                    children: [
+                      const Text('Popular item threshold: '),
+                      Text(
+                        '$_reviewThreshold reviews',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
                   Slider(
                     value: _reviewThreshold.toDouble(),
-                    min: 50, max: 1000, divisions: 19,
+                    min: 50,
+                    max: 1000,
+                    divisions: 19,
                     label: '$_reviewThreshold',
                     onChanged: (v) async {
                       setState(() => _reviewThreshold = v.round());
-                      final count = await BackgroundUpdater.estimateProductCount(v.round());
+                      final count =
+                          await BackgroundUpdater.estimateProductCount(
+                            v.round(),
+                          );
                       setState(() => _estimatedCount = count);
                     },
-                    onChangeEnd: (v) => BackgroundUpdater.setReviewThreshold(v.round()),
+                    onChangeEnd: (v) =>
+                        BackgroundUpdater.setReviewThreshold(v.round()),
                   ),
                   Text(
                     '~$_estimatedCount products with ≥$_reviewThreshold reviews checked daily',

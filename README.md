@@ -2,24 +2,22 @@
 
 ![MY Dan's](assets/git_banner.png)
 
-**The staff tool Dan Murphy's never built.**
-
-## What is it?
+# A staff tool for Dan Murphys.
 
 An Android app for Dan Murphy's floor staff. Search any product in seconds, scan shelf barcodes, and filter inventory with way more precision than the website.
 
 ## Why?
 
-Because a customer asking *"What preservative-free Pinot Noir from New Zealand do you have under \"* shouldn't take 5 minutes to answer.
+I have often found customers asking questions like *"What preservative-free Pinot Noir from New Zealand do you have under $20"* or *"What is your best deal on beers at the moment"*. Sometimes I just don't know the answer, and there really was no way to filter down something so specific without walking up and down isle comparing and reading labels.
+
+As a solution I created a better filter to be able to narrow down and answer these questions more effectively.
 
 With MY Dan's, you can filter:
 - Category: Wine → Red Wine → Pinot Noir
 - Country: New Zealand
-- Price: max \
-- Preservative free: check the category
+- Price: max $20
+- Preservative free
 - Alcohol: max 12%
-
-And see exactly what's available. In seconds.
 
 ## Features
 
