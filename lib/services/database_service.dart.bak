@@ -1,0 +1,503 @@
+import 'dart:convert';
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart' as p;
+import 'package:flutter/services.dart';
+import '../models/product.dart';
+import '../models/product.dart';
+
+/// SQLite-backed product database.
+/// Replaces the in-memory Map<String, Product> with indexed, searchable storage.
+///
+/// On first launch, copies the bundled `assets/init_db.json` into SQLite.
+/// Future launches load directly from SQLite.
+class DatabaseService {
+  static DatabaseService? _instance;
+  static DatabaseService get instance => _instance!;
+
+  Database? _db;
+  bool _ready = false;
+
+  Database get db => _db!;
+  bool get isReady => _ready;
+  int _count = 0;
+  int get count => _count;
+
+  static Future<void> init() async {
+    _instance = DatabaseService();
+    await _instance!._open();
+  }
+
+  Future<void> _open() async {
+    final dbPath = await getDatabasesPath();
+    _db = await openDatabase(
+      p.join(dbPath, 'mydans.db'),
+      version: 3,
+      onCreate: _createTables,
+      onUpgrade: _migrate,
+    );
+    _count =
+        Sqflite.firstIntValue(
+          await _db!.rawQuery('SELECT COUNT(*) FROM products'),
+        ) ??
+        0;
+    _ready = true;
+    print('[SQLite] Opened DB with $_count products');
+
+    // If empty, seed from bundled JSON
+    if (_count == 0) {
+      await _seedFromBundle();
+    }
+  }
+
+  Future<void> _createTables(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE products (
+        stockcode         TEXT PRIMARY KEY NOT NULL,
+        title             TEXT NOT NULL,
+        brand             TEXT NOT NULL DEFAULT '',
+        description       TEXT NOT NULL DEFAULT '',
+        rich_description  TEXT NOT NULL DEFAULT '',
+        url_friendly      TEXT NOT NULL DEFAULT '',
+        package_size      TEXT NOT NULL DEFAULT '',
+        alcohol_volume    INTEGER NOT NULL DEFAULT 0,
+        varietal          TEXT NOT NULL DEFAULT '',
+        region            TEXT NOT NULL DEFAULT '',
+        state             TEXT NOT NULL DEFAULT '',
+        country           TEXT NOT NULL DEFAULT '',
+        vintage           INTEGER NOT NULL DEFAULT 0,
+        closure           TEXT NOT NULL DEFAULT '',
+        standard_drinks   INTEGER NOT NULL DEFAULT 0,
+        wine_body         TEXT NOT NULL DEFAULT '',
+        wine_sweetness    TEXT NOT NULL DEFAULT '',
+        product_type      INTEGER NOT NULL DEFAULT 0,
+        main_category     INTEGER NOT NULL DEFAULT 0,
+        pack_type         INTEGER NOT NULL DEFAULT 0,
+        spirit_style      TEXT NOT NULL DEFAULT '',
+        whisky_style      TEXT NOT NULL DEFAULT '',
+        vendor_name       TEXT NOT NULL DEFAULT '',
+        vendor_id         TEXT NOT NULL DEFAULT '',
+        avg_rating        REAL NOT NULL DEFAULT 0,
+        review_count      INTEGER NOT NULL DEFAULT 0,
+        food_match        TEXT NOT NULL DEFAULT '',
+        winemaker         TEXT NOT NULL DEFAULT '',
+        award_winner      TEXT NOT NULL DEFAULT '',
+        image_count       INTEGER NOT NULL DEFAULT 0,
+        categories        TEXT NOT NULL DEFAULT '[]',
+        product_tags      TEXT NOT NULL DEFAULT '[]',
+        product_sashes    TEXT NOT NULL DEFAULT '[]',
+        unique_selling    TEXT NOT NULL DEFAULT '[]',
+        prices            TEXT NOT NULL DEFAULT '[]',
+        inventory         TEXT NOT NULL DEFAULT '{}',
+        info_message      TEXT NOT NULL DEFAULT '{}',
+        alc_vol_message   TEXT NOT NULL DEFAULT '{}',
+        stock_on_hand     INTEGER NOT NULL DEFAULT 0,
+        backorder_stock   INTEGER NOT NULL DEFAULT 0,
+        backorder_message TEXT NOT NULL DEFAULT '',
+        available_pack_types TEXT NOT NULL DEFAULT '[]',
+        flags             INTEGER NOT NULL DEFAULT 1,
+        supply_limit      INTEGER NOT NULL DEFAULT 9999,
+        minimum_quantity  INTEGER NOT NULL DEFAULT 1,
+        display_quantity  INTEGER NOT NULL DEFAULT 1,
+        unit              TEXT NOT NULL DEFAULT '',
+        pkg_size_display  TEXT NOT NULL DEFAULT '',
+        parent_stockcode  TEXT NOT NULL DEFAULT '',
+        source            TEXT NOT NULL DEFAULT '',
+        first_seen        TEXT
+      )
+    ''');
+
+    await db.execute('CREATE INDEX idx_p_brand ON products(brand)');
+    await db.execute('CREATE INDEX idx_p_country ON products(country)');
+    await db.execute('CREATE INDEX idx_p_review_count ON products(review_count)');
+    await db.execute('CREATE INDEX idx_p_product_type ON products(product_type)');
+    await db.execute('CREATE INDEX idx_p_main_category ON products(main_category)');
+
+    await db.execute('''
+      CREATE VIRTUAL TABLE products_fts USING fts4(
+        stockcode, title, brand, description
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE price_history (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        stockcode   TEXT NOT NULL REFERENCES products(stockcode),
+        price_type  TEXT NOT NULL DEFAULT 'singleprice',
+        value       REAL NOT NULL,
+        recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    ''');
+    await db.execute('CREATE INDEX idx_ph_stockcode ON price_history(stockcode)');
+
+    await db.execute('''
+      CREATE TABLE previous_titles (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        stockcode   TEXT NOT NULL REFERENCES products(stockcode),
+        title       TEXT NOT NULL,
+        changed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    ''');
+
+    print('[SQLite] Tables created (v3)');
+  }
+
+  Future<void> _migrate(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 3) {
+      // Drop and recreate — too many schema changes for ALTER
+      await db.execute('DROP TABLE IF EXISTS products');
+      await db.execute('DROP TABLE IF EXISTS products_fts');
+      await db.execute('DROP TABLE IF EXISTS price_history');
+      await db.execute('DROP TABLE IF EXISTS previous_titles');
+      await _createTables(db, 3);
+    }
+  }
+
+  /// Seed from bundled JSON (first launch)
+  Future<void> _seedFromBundle() async {
+    try {
+      final jsonStr = await rootBundle.loadString('assets/init_db.json');
+      final decoded = json.decode(jsonStr);
+      final batch = _db!.batch();
+
+      if (decoded is List) {
+        // Array format [{stockcode:..., ...}, ...]
+        for (final p in decoded) {
+          if (p is Map<String, dynamic>) {
+            final sc = (p['stockcode'] ?? '').toString();
+            if (sc.isNotEmpty) _insertProduct(batch, sc, p);
+          }
+        }
+        _count = decoded.length;
+      } else if (decoded is Map) {
+        // Map format {stockcode: {...}, ...}
+        for (final entry in (decoded as Map<String, dynamic>).entries) {
+          final p = entry.value as Map<String, dynamic>;
+          _insertProduct(batch, entry.key, p);
+        }
+        _count = decoded.length;
+      }
+
+      await batch.commit(noResult: true);
+      _rebuildFts();
+      print('[SQLite] Seeded $_count products from bundled JSON');
+    } catch (e) {
+      print('[SQLite] No bundled DB found, starting empty: $e');
+    }
+  }
+
+  /// Insert or update a product
+  Future<void> upsertProduct(
+    String stockcode,
+    Map<String, dynamic> data,
+  ) async {
+    final batch = _db!.batch();
+    _insertProduct(batch, stockcode, data);
+    await batch.commit(noResult: true);
+    _count =
+        Sqflite.firstIntValue(
+          await _db!.rawQuery('SELECT COUNT(*) FROM products'),
+        ) ??
+        _count;
+  }
+
+  /// Batch-insert many products (from scraper output)
+  Future<void> bulkInsert(Map<String, Map<String, dynamic>> products) async {
+    final batch = _db!.batch();
+    for (final entry in products.entries) {
+      _insertProduct(batch, entry.key, entry.value);
+    }
+    await batch.commit(noResult: true);
+    _count =
+        Sqflite.firstIntValue(
+          await _db!.rawQuery('SELECT COUNT(*) FROM products'),
+        ) ??
+        _count;
+    _rebuildFts();
+    print(
+      '[SQLite] Bulk inserted ${products.length} products (total: $_count)',
+    );
+  }
+
+  void _insertProduct(
+    Batch batch,
+    String stockcode,
+    Map<String, dynamic> json,
+  ) {
+    batch.insert('products', {
+      'stockcode': stockcode,
+      'title': (json['t'] ?? '').toString(),
+      'brand': (json['b'] ?? '').toString(),
+      'description': (json['d'] ?? '').toString(),
+      'rich_description': (json['rd'] ?? '').toString(),
+      'url_friendly': (json['u'] ?? '').toString(),
+      'package_size': (json['ps'] ?? '').toString(),
+      'alcohol_volume': json['abv'] ?? 0,
+      'varietal': (json['v'] ?? '').toString(),
+      'region': (json['r'] ?? '').toString(),
+      'state': (json['st'] ?? '').toString(),
+      'country': (json['c'] ?? '').toString(),
+      'vintage': json['yr'] ?? 0,
+      'closure': (json['cl'] ?? '').toString(),
+      'standard_drinks': json['sd'] ?? 0,
+      'wine_body': (json['wb'] ?? '').toString(),
+      'wine_sweetness': (json['ws'] ?? '').toString(),
+      'product_type': json['pt'] ?? 0,
+      'main_category': json['mc'] ?? 0,
+      'pack_type': json['pk'] ?? 0,
+      'spirit_style': (json['ss'] ?? '').toString(),
+      'whisky_style': (json['wy'] ?? '').toString(),
+      'vendor_name': (json['vn'] ?? '').toString(),
+      'vendor_id': (json['vi'] ?? '').toString(),
+      'avg_rating': json['ar'] ?? 0,
+      'review_count': json['rc'] ?? 0,
+      'food_match': (json['fm'] ?? '').toString(),
+      'winemaker': (json['wm'] ?? '').toString(),
+      'award_winner': (json['aw'] ?? '').toString(),
+      'image_count': json['ic'] ?? 0,
+      'categories': jsonEncode(json['ct'] ?? []),
+      'product_tags': jsonEncode(json['tg'] ?? []),
+      'product_sashes': jsonEncode(json['sh'] ?? []),
+      'unique_selling': jsonEncode(json['us'] ?? []),
+      'prices': jsonEncode(json['pr'] ?? []),
+      'inventory': jsonEncode(json['inv'] ?? {}),
+      'info_message': jsonEncode(json['im'] ?? {}),
+      'alc_vol_message': jsonEncode(json['am'] ?? {}),
+      'stock_on_hand': json['soh'] ?? 0,
+      'backorder_stock': json['bos'] ?? 0,
+      'backorder_message': (json['bom'] ?? '').toString(),
+      'available_pack_types': jsonEncode(json['ap'] ?? []),
+      'flags': json['fl'] ?? 1,
+      'supply_limit': json['sl'] ?? 9999,
+      'minimum_quantity': json['mq'] ?? 1,
+      'display_quantity': json['dq'] ?? 1,
+      'unit': (json['un'] ?? '').toString(),
+      'pkg_size_display': (json['pd'] ?? '').toString(),
+      'parent_stockcode': (json['pc'] ?? '').toString(),
+      'source': (json['src'] ?? '').toString(),
+      'first_seen': json['firstSeen']?.toString(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Full-text search using FTS4
+  Future<List<Product>> search(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
+
+    // FTS4 query with prefix matching
+    final ftsQuery = trimmed
+        .split(RegExp(r'\s+'))
+        .map((w) => '"$w"*')
+        .join(' OR ');
+
+    final rows = await _db!.rawQuery(
+      '''
+      SELECT p.* FROM products p
+      JOIN products_fts fts ON p.rowid = fts.docid
+      WHERE products_fts MATCH ?
+      LIMIT 100
+    ''',
+      [ftsQuery],
+    );
+
+    final results = <Product>[];
+    for (final r in rows) {
+      try {
+        results.add(_rowToProduct(r));
+      } catch (_) {}
+    }
+
+    // If FTS didn't find enough, fall back to LIKE search
+    if (results.length < 5) {
+      try {
+        final likeResults = await _likeSearch(trimmed);
+        final existingCodes = results.map((p) => p.stockcode).toSet();
+        for (final p in likeResults) {
+          if (!existingCodes.contains(p.stockcode)) {
+            results.add(p);
+          }
+        }
+      } catch (_) {}
+    }
+
+    return results.take(30).toList();
+  }
+
+  /// Fallback LIKE search for partial matches
+  Future<List<Product>> _likeSearch(String query) async {
+    final like = '%$query%';
+    final rows = await _db!.rawQuery(
+      '''
+      SELECT * FROM products
+      WHERE stockcode = ? OR stockcode LIKE ? OR title LIKE ? OR brand LIKE ?
+      LIMIT 50
+    ''',
+      [query, '$query%', like, like],
+    );
+    return rows.map((r) => _rowToProduct(r)).toList();
+  }
+
+  /// Get a single product by stockcode
+  Future<Product?> getProduct(String stockcode) async {
+    final rows = await _db!.query(
+      'products',
+      where: 'stockcode = ?',
+      whereArgs: [stockcode],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return _rowToProduct(rows.first);
+  }
+
+  /// Get products matching category filter
+  Future<List<Product>> getByCategory(String category) async {
+    final rows = await _db!.rawQuery(
+      "SELECT * FROM products WHERE categories LIKE ? LIMIT 200",
+      ['%$category%'],
+    );
+    return rows.map((r) => _rowToProduct(r)).toList();
+  }
+
+  /// Get new products (first seen within N days)
+  Future<List<Product>> getNewProducts(int days) async {
+    final cutoff = DateTime.now().subtract(Duration(days: days));
+    final rows = await _db!.query(
+      'products',
+      where: 'first_seen >= ?',
+      whereArgs: [cutoff.toIso8601String()],
+      limit: 200,
+    );
+    return rows.map((r) => _rowToProduct(r)).toList();
+  }
+
+  /// Rebuild FTS index from products table
+  Future<void> _rebuildFts() async {
+    await _db!.execute('DELETE FROM products_fts');
+    await _db!.execute('''
+      INSERT INTO products_fts(docid, stockcode, title, brand, description)
+      SELECT rowid, stockcode, title, brand, description FROM products
+    ''');
+  }
+
+  /// Parse a JSON string column into a List<String>
+  List<String> _parseStringList(String? raw) {
+    if (raw == null || raw.isEmpty || raw == '[]') return [];
+    try {
+      return (jsonDecode(raw) as List).map((e) => e.toString()).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Parse a JSON string column into a Map<String, dynamic>
+  Map<String, dynamic> _parseJsonMap(String? raw) {
+    if (raw == null || raw.isEmpty || raw == '{}') return {};
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Parse a JSON string column into a List<Map<String, dynamic>>
+  List<Map<String, dynamic>> _parseJsonList(String? raw) {
+    if (raw == null || raw.isEmpty || raw == '[]') return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list
+          .map(
+            (e) =>
+                e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{},
+          )
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Parse prices JSON into ProductPrice list
+  List<ProductPrice> _parsePrices(String? raw) {
+    if (raw == null || raw.isEmpty || raw == '[]') return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list.map((e) {
+        final m = e as Map<String, dynamic>;
+        return ProductPrice(
+          type: (m['type'] ?? '').toString(),
+          message: (m['message'] ?? '').toString(),
+          value: (m['value'] ?? 0).toDouble(),
+          preText: (m['preText'] ?? '').toString(),
+          isMemberOffer: m['isMemberOffer'] == true,
+          packType: (m['packType'] ?? '').toString(),
+          beforePromotion: (m['beforePromotion'] ?? 0).toDouble(),
+          afterPromotion: (m['afterPromotion'] ?? 0).toDouble(),
+        );
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Convert a database row to a Product object
+  Product _rowToProduct(Map<String, dynamic> row) {
+    final flags = row['flags'] as int? ?? 0;
+    return Product(
+      stockcode: row['stockcode'] as String,
+      title: row['title'] as String? ?? '',
+      brand: row['brand'] as String? ?? '',
+      description: row['description'] as String? ?? '',
+      richDescription: row['rich_description'] as String? ?? '',
+      urlFriendlyName: row['url_friendly'] as String? ?? '',
+      packageSize: row['package_size'] as String? ?? '',
+      alcoholVolume: row['alcohol_volume'] as int? ?? 0,
+      varietal: row['varietal'] as String? ?? '',
+      region: row['region'] as String? ?? '',
+      state: row['state'] as String? ?? '',
+      country: row['country'] as String? ?? '',
+      vintage: row['vintage'] as int? ?? 0,
+      closure: row['closure'] as String? ?? '',
+      standardDrinks: row['standard_drinks'] as int? ?? 0,
+      wineBody: row['wine_body'] as String? ?? '',
+      wineSweetness: row['wine_sweetness'] as String? ?? '',
+      productType: row['product_type'] as int? ?? 0,
+      mainCategory: row['main_category'] as int? ?? 0,
+      packType: row['pack_type'] as int? ?? 0,
+      spiritStyle: row['spirit_style'] as String? ?? '',
+      whiskyStyle: row['whisky_style'] as String? ?? '',
+      vendorName: row['vendor_name'] as String? ?? '',
+      vendorId: row['vendor_id'] as String? ?? '',
+      averageRating: (row['avg_rating'] as num?)?.toDouble(),
+      totalReviewCount: row['review_count'] as int? ?? 0,
+      foodMatch: row['food_match'] as String? ?? '',
+      winemaker: row['winemaker'] as String? ?? '',
+      awardWinner: row['award_winner'] as String? ?? '',
+      imageCount: row['image_count'] as int? ?? 0,
+      categories: _parseStringList(row['categories'] as String?),
+      productTags: _parseJsonList(row['product_tags'] as String?),
+      productSashes: _parseJsonList(row['product_sashes'] as String?),
+      uniqueSellingProposition: _parseJsonList(row['unique_selling'] as String?),
+      prices: _parsePrices(row['prices'] as String?),
+      inventory: _parseJsonMap(row['inventory'] as String?),
+      infoMessage: _parseJsonMap(row['info_message'] as String?),
+      alcVolMessage: _parseJsonMap(row['alc_vol_message'] as String?),
+      stockOnHand: row['stock_on_hand'] as int? ?? 0,
+      backorderStockOnHand: row['backorder_stock'] as int? ?? 0,
+      backorderMessage: row['backorder_message'] as String? ?? '',
+      availablePackTypes: _parseJsonList(row['available_pack_types'] as String?),
+      flags: flags,
+      supplyLimit: row['supply_limit'] as int? ?? 9999,
+      minimumQuantity: row['minimum_quantity'] as int? ?? 1,
+      displayQuantity: row['display_quantity'] as int? ?? 1,
+      unit: row['unit'] as String? ?? '',
+      packageSizeDisplay: row['pkg_size_display'] as String? ?? '',
+      parentStockCode: row['parent_stockcode'] as String? ?? '',
+      source: row['source'] as String? ?? '',
+      firstSeen: row['first_seen'] != null ? DateTime.tryParse(row['first_seen'] as String) : null,
+    );
+  }
+
+  /// Close the database
+  Future<void> close() async {
+    await _db?.close();
+    _ready = false;
+  }
+}

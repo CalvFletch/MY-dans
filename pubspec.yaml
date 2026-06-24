@@ -53,6 +53,7 @@ dev_dependencies:
   widgetbook: ^3.10.0
   flutter_launcher_icons: ^0.14.4
   image: ^4.9.1
+  sqflite_common_ffi: ^2.4.2
 
 flutter_launcher_icons:
   android: true
@@ -76,6 +77,7 @@ flutter:
     - assets/dans-header-banner-1.svg
     - assets/original-dans-head-logo.svg
     - assets/barcode_scanner.svg
+    - assets/mydans.db
     - assets/init_db.json
 
   # An image asset can refer to one or more resolution-specific "variants", see

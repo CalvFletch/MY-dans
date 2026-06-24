@@ -20,16 +20,39 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final _controller = TextEditingController();
+  final _scrollController = ScrollController();
   List<Product> _results = [];
   List<Product> _allResults = [];
   bool _loading = false;
+  bool _loadingMore = false;
   bool _showTeamPrices = false;
   String? _error;
   Timer? _debounce;
   final _filters = ProductFilters();
   bool _numPad = false;
-  String _sortMode =
-      'relevance'; // relevance, price_asc, price_desc, name_asc, name_desc, alcohol_asc, alcohol_desc, stock_first
+  int _filterOffset = 0;
+  static const _filterPageSize = 30;
+  bool _hasMore = true;
+  String _sortMode = 'relevance';
+
+  /// Convert UI sort mode to DB sortField / sortDir
+  String get _dbSortField {
+    switch (_sortMode) {
+      case 'price_asc': case 'price_desc': return 'price';
+      case 'name_asc': case 'name_desc': return 'title';
+      case 'stock_first': return 'stock_on_hand';
+      case 'alcohol_asc': case 'alcohol_desc': case 'ppl_asc': case 'ppl_desc':
+      default: return 'review_count';
+    }
+  }
+  String get _dbSortDir {
+    switch (_sortMode) {
+      case 'price_asc': case 'name_asc': case 'alcohol_asc': case 'ppl_asc': return 'ASC';
+      default: return 'DESC';
+    }
+  }
+  /// True if sort can be done in SQL (price, title, stock, review_count)
+  bool get _sortInSql => !_sortMode.startsWith('ppl') && !_sortMode.startsWith('alcohol');
 
   static const _categoryHierarchy = {
     'Wine': [
@@ -165,17 +188,21 @@ class _SearchScreenState extends State<SearchScreen> {
 
   static const _sortLabels = {
     'relevance': 'Relevance',
-    'price_asc': 'Price',
-    'price_desc': 'Price',
-    'name_asc': 'Name',
-    'name_desc': 'Name',
-    'alcohol_asc': 'ABV',
-    'alcohol_desc': 'ABV',
+    'price_asc': 'Price ↑',
+    'price_desc': 'Price ↓',
+    'ppl_asc': '\$/L ↑',
+    'ppl_desc': '\$/L ↓',
+    'name_asc': 'Name ↑',
+    'name_desc': 'Name ↓',
+    'alcohol_asc': 'ABV ↑',
+    'alcohol_desc': 'ABV ↓',
     'stock_first': 'In Stock',
   };
   static const _sortIcons = {
     'price_asc': Icons.arrow_upward,
     'price_desc': Icons.arrow_downward,
+    'ppl_asc': Icons.arrow_upward,
+    'ppl_desc': Icons.arrow_downward,
     'name_asc': Icons.arrow_upward,
     'name_desc': Icons.arrow_downward,
     'alcohol_asc': Icons.arrow_upward,
@@ -184,6 +211,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   static const _sortCycle = {
     'price': ['price_asc', 'price_desc'],
+    'ppl': ['ppl_asc', 'ppl_desc'],
     'name': ['name_asc', 'name_desc'],
     'abv': ['alcohol_asc', 'alcohol_desc'],
     'stock': ['stock_first'],
@@ -204,7 +232,12 @@ class _SearchScreenState extends State<SearchScreen> {
           _sortMode = cycle[idx + 1];
         }
       }
-      _applyFiltersAndSort();
+      // If filters active & no text, re-query DB with new sort
+      if (_controller.text.trim().isEmpty && _filters.isActive) {
+        _search();
+      } else {
+        _applyFiltersAndSort();
+      }
     });
   }
 
@@ -280,12 +313,97 @@ class _SearchScreenState extends State<SearchScreen> {
       case 'stock_first':
         products.sort((a, b) => b.stockOnHand.compareTo(a.stockOnHand));
         break;
+      case 'ppl_asc':
+        products.sort((a, b) => (_ppl(a) ?? double.infinity).compareTo(_ppl(b) ?? double.infinity));
+        break;
+      case 'ppl_desc':
+        products.sort((a, b) => (_ppl(b) ?? 0).compareTo(_ppl(a) ?? 0));
+        break;
     }
     return products;
   }
 
+  double? _ppl(Product p) {
+    final price = p.singlePrice?.value;
+    if (price == null || price <= 0) return null;
+    final litres = _litresFromPackage(p.packageSize);
+    if (litres == null || litres <= 0) return null;
+    return price / litres;
+  }
+
+  double? _litresFromPackage(String pkg) {
+    if (pkg.isEmpty) return null;
+    final s = pkg.toLowerCase();
+    // Match patterns like "750ml", "1.5L", "375ml", "6x330ml", "24x375ml"
+    final multi = RegExp(r'(\d+)\s*x\s*(\d+)\s*ml', caseSensitive: false);
+    final mm = multi.firstMatch(s);
+    if (mm != null) {
+      return int.parse(mm.group(1)!) * int.parse(mm.group(2)!) / 1000.0;
+    }
+    final ml = RegExp(r'(\d+)\s*ml', caseSensitive: false).firstMatch(s);
+    if (ml != null) return int.parse(ml.group(1)!) / 1000.0;
+    final l = RegExp(r'([\d.]+)\s*l', caseSensitive: false).firstMatch(s);
+    if (l != null) return double.parse(l.group(1)!);
+    return 0.75; // default
+  }
+
   void _applyFiltersAndSort() {
     _results = _applySort(_filters.apply(_allResults));
+  }
+
+  void _loadMoreFilterResults() {
+    if (_loadingMore || !_hasMore) return;
+    setState(() => _loadingMore = true);
+    _filterOffset += _filterPageSize;
+    DatabaseService.instance.searchByFilter(
+      countries: _filters.countries.toList(),
+      categories: _filters.categories.toList(),
+      regions: _filters.regions.toList(),
+      inStockOnly: _filters.inStockOnly,
+      newOnly: _filters.newOnly,
+      limit: _filterPageSize,
+      offset: _filterOffset,
+      sortField: _dbSortField,
+      sortDir: _dbSortDir,
+    ).then((results) {
+      if (!mounted) return;
+      setState(() {
+        _allResults.addAll(results);
+        _results = _sortInSql ? List.from(_allResults) : _applySort(List.from(_allResults));
+        _loadingMore = false;
+        _hasMore = results.length >= _filterPageSize;
+      });
+    });
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.local_bar, size: 64, color: Colors.grey[300]),
+          const SizedBox(height: 12),
+          Text(
+            'Search or apply a filter to browse',
+            style: TextStyle(color: Colors.grey[500], fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<String> _stripParentCategories(List<String> cats) {
+    final result = <String>[];
+    for (final c in cats) {
+      final children = _categoryHierarchy[c];
+      if (children == null || children.isEmpty) {
+        result.add(c);
+        continue;
+      }
+      if (children.any((child) => cats.contains(child))) continue;
+      result.add(c);
+    }
+    return result;
   }
 
   void _removeFilter(String type) {
@@ -375,8 +493,16 @@ class _SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onSearchChanged);
+    _scrollController.addListener(_onScroll);
     ApiService.initCatalog();
     _loadSettings();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
+        !_loadingMore && _hasMore && _controller.text.trim().isEmpty && _filters.isActive) {
+      _loadMoreFilterResults();
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -388,24 +514,59 @@ class _SearchScreenState extends State<SearchScreen> {
     _debounce?.cancel();
     final query = _controller.text.trim();
     if (query.isEmpty) {
-      setState(() {
-        _results = [];
-        _error = null;
-        _loading = false;
-      });
+      // Don't clear if filters active — _openFilters triggers search
+      if (!_filters.isActive) {
+        setState(() {
+          _results = [];
+          _allResults = [];
+          _error = null;
+          _loading = false;
+        });
+      }
       return;
     }
+    // Text search
     _debounce = Timer(const Duration(milliseconds: 100), () {
       _search();
     });
   }
 
-  void _search() {
+  void _search({List<String>? overrideCategories}) {
     final query = _controller.text.trim();
 
-    // Allow filter-only search with no text
-    final searchTerm = query.isEmpty && _filters.isActive ? 'wine' : query;
-    if (searchTerm.isEmpty) {
+    // Filter-only search
+    if (query.isEmpty && _filters.isActive) {
+      final cats = overrideCategories ?? _filters.categories.toList();
+      setState(() {
+        _loading = true;
+        _filterOffset = 0;
+        _hasMore = true;
+      });
+      DatabaseService.instance.searchByFilter(
+        countries: _filters.countries.toList(),
+        categories: cats,
+        regions: _filters.regions.toList(),
+        inStockOnly: _filters.inStockOnly,
+        newOnly: _filters.newOnly,
+        limit: _filterPageSize,
+        offset: 0,
+        sortField: _dbSortField,
+        sortDir: _dbSortDir,
+      ).then((results) {
+        if (!mounted) return;
+        // For PPL / ABV sorts, do Dart-side sort; otherwise SQL already sorted
+        final sorted = _sortInSql ? results : _applySort(results);
+        setState(() {
+          _allResults = results;
+          _results = sorted;
+          _loading = false;
+          _hasMore = results.length >= _filterPageSize;
+        });
+      });
+      return;
+    }
+
+    if (query.isEmpty) {
       setState(() {
         _allResults = [];
         _results = [];
@@ -417,7 +578,7 @@ class _SearchScreenState extends State<SearchScreen> {
     setState(() => _loading = true);
 
     ApiService.searchWithApi(
-      searchTerm,
+      query,
       onUpdated: () async {
         if (!mounted) return;
         // Quietly re-query local DB — no _loading toggle, no web re-fetch
@@ -472,8 +633,12 @@ class _SearchScreenState extends State<SearchScreen> {
       _filters.categoryAnd = result.categoryAnd;
       _filters.countryAnd = result.countryAnd;
 
-      // If no results loaded yet, fetch to enable filter-only browsing
-      if (_allResults.isEmpty && _filters.isActive) {
+      // Strip parent categories (e.g. if "Shiraz" selected, remove "Wine"/"Red Wine")
+      final cleanCategories = _stripParentCategories(result.categories.toList());
+
+      if (_controller.text.trim().isEmpty) {
+        _search(overrideCategories: cleanCategories);
+      } else if (_allResults.isEmpty && _filters.isActive) {
         _search();
       } else {
         setState(() => _applyFiltersAndSort());
@@ -652,6 +817,7 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _scrollController.dispose();
     _controller.removeListener(_onSearchChanged);
     _controller.dispose();
     super.dispose();
@@ -781,6 +947,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     children: [
                       _sortChip('Relevance', 'relevance'),
                       _sortChip('Price', 'price'),
+                      _sortChip('\$/L', 'ppl'),
                       _sortChip('Name', 'name'),
                       _sortChip('ABV', 'abv'),
                       _sortChip('In Stock', 'stock'),
@@ -799,40 +966,16 @@ class _SearchScreenState extends State<SearchScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.search_off,
-                          size: 48,
-                          color: Colors.grey[400],
-                        ),
+                        Icon(Icons.search_off, size: 48, color: Colors.grey[400]),
                         const SizedBox(height: 8),
-                        Text(
-                          _error!,
-                          style: TextStyle(color: Colors.grey[600]),
-                        ),
+                        Text(_error!, style: TextStyle(color: Colors.grey[600])),
                       ],
                     ),
                   )
-                : _controller.text.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.local_bar,
-                          size: 64,
-                          color: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Search by product name or code',
-                          style: TextStyle(
-                            color: Colors.grey[500],
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
+                : _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _controller.text.isEmpty && _results.isEmpty && !_filters.isActive
+                ? _buildEmptyState()
                 : _results.isEmpty && !_loading
                 ? const SizedBox.shrink()
                 : ListView.builder(

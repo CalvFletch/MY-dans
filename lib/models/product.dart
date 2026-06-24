@@ -35,6 +35,8 @@ class Product {
   final String standardDrinks;
   final String wineBody;
   final String wineSweetness;
+  final String productType;
+  final String mainCategory;
   final double? averageRating;
   final int totalReviewCount;
   final List<ProductPrice> prices;
@@ -116,6 +118,8 @@ class Product {
     required this.standardDrinks,
     required this.wineBody,
     required this.wineSweetness,
+    this.productType = '',
+    this.mainCategory = '',
     this.averageRating,
     this.totalReviewCount = 0,
     required this.prices,
@@ -361,6 +365,8 @@ class Product {
       standardDrinks: (json['standardDrinks'] ?? '').toString(),
       wineBody: (json['wineBody'] ?? '').toString(),
       wineSweetness: (json['wineSweetness'] ?? '').toString(),
+      productType: (json['productType'] ?? '').toString(),
+      mainCategory: (json['mainCategory'] ?? '').toString(),
       averageRating: (json['averageRating'] as num?)?.toDouble(),
       totalReviewCount: json['totalReviewCount'] ?? 0,
       prices: prices,
@@ -611,6 +617,8 @@ class Product {
       standardDrinks: standardDrinks,
       wineBody: wineBody,
       wineSweetness: wineSweetness,
+      productType: productType,
+      mainCategory: mainCategory,
       averageRating: averageRating,
       totalReviewCount: totalReviewCount,
       prices: prices,

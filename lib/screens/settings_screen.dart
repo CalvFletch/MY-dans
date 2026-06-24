@@ -231,7 +231,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           SwitchListTile(
             title: const Text('Show Team Prices'),
-            subtitle: const Text('30% off eligible Pinnacle products'),
             secondary: Icon(
               _teamDiscount ? Icons.discount : Icons.discount_outlined,
               color: AppColors.spendAndGet,
@@ -243,7 +242,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           const SizedBox(height: 28),
-          _sectionHeader('Daily Update', Icons.update),
+          _sectionHeader('Schedualed Updater', Icons.update),
           const SizedBox(height: 8),
           Card(
             child: Padding(
@@ -278,7 +277,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         BackgroundUpdater.setReviewThreshold(v.round()),
                   ),
                   Text(
-                    '~$_estimatedCount products with ≥$_reviewThreshold reviews checked daily',
+                    '$_estimatedCount products checked daily',
                     style: TextStyle(color: Colors.grey[500], fontSize: 12),
                   ),
                   const SizedBox(height: 8),
@@ -293,34 +292,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 28),
-          _sectionHeader('About', Icons.info_outline),
+          _sectionHeader('Data', Icons.info_outline),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "MY Dan's",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    'Staff helper for Dan Murphy\'s team members.',
-                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
-                  ),
                   const SizedBox(height: 8),
                   Text(
-                    'Local data: ${SearchService.size} products from promotional catalog',
+                    'Local data: ${SearchService.size} products',
                     style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                  ),
-                  Text(
-                    'Live search covers full Dan Murphy\'s range (~8000+ products)',
-                    style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'v1.0.0',
-                    style: TextStyle(color: Colors.grey[400], fontSize: 12),
                   ),
                 ],
               ),

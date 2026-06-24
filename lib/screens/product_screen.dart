@@ -310,7 +310,7 @@ class _ProductScreenState extends State<ProductScreen> {
     // Selected pack type (default: single/bottle)
     final selectedPack = packVariants.firstWhere(
       (pp) => pp.type == 'singleprice' || pp.packType == 'Bottle',
-      orElse: () => packVariants.isNotEmpty ? packVariants.first : price!,
+      orElse: () => packVariants.isNotEmpty ? packVariants.first : (price ?? ProductPrice(value: 0, packType: '', type: 'singleprice')),
     );
 
     return SingleChildScrollView(

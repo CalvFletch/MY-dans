@@ -1,8 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
-import '../models/product.dart';
 import '../models/product.dart';
 
 /// SQLite-backed product database.
@@ -28,9 +28,22 @@ class DatabaseService {
   }
 
   Future<void> _open() async {
-    final dbPath = await getDatabasesPath();
+    final dbDir = await getDatabasesPath();
+    final dbFile = p.join(dbDir, 'mydans.db');
+    
+    // Copy pre-built DB from assets if not exists
+    if (!File(dbFile).existsSync()) {
+      try {
+        final data = await rootBundle.load('assets/mydans.db');
+        await File(dbFile).writeAsBytes(data.buffer.asUint8List());
+        print('[SQLite] Copied pre-built DB from assets');
+      } catch (e) {
+        print('[SQLite] No pre-built DB: $e');
+      }
+    }
+    
     _db = await openDatabase(
-      p.join(dbPath, 'mydans.db'),
+      dbFile,
       version: 3,
       onCreate: _createTables,
       onUpgrade: _migrate,
@@ -43,7 +56,15 @@ class DatabaseService {
     _ready = true;
     print('[SQLite] Opened DB with $_count products');
 
-    // If empty, seed from bundled JSON
+    // Build FTS index if missing (desktop SQLite skips FTS4)
+    try {
+      await _db!.execute('CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts4(stockcode, title, brand, description)');
+      await _db!.rawQuery('SELECT COUNT(*) FROM products_fts').then((r) {
+        if (Sqflite.firstIntValue(r) == 0) _rebuildFts();
+      });
+    } catch (_) {}
+    
+    // If still empty, try legacy JSON seed
     if (_count == 0) {
       await _seedFromBundle();
     }
@@ -68,6 +89,8 @@ class DatabaseService {
         standard_drinks   TEXT NOT NULL DEFAULT '',
         wine_body         TEXT NOT NULL DEFAULT '',
         wine_sweetness    TEXT NOT NULL DEFAULT '',
+        product_type      TEXT NOT NULL DEFAULT '',
+        main_category     TEXT NOT NULL DEFAULT '',
         avg_rating        REAL NOT NULL DEFAULT 0,
         review_count      INTEGER NOT NULL DEFAULT 0,
         categories        TEXT NOT NULL DEFAULT '[]',
@@ -139,6 +162,13 @@ class DatabaseService {
       await db.execute("ALTER TABLE products ADD COLUMN parent_stockcode TEXT NOT NULL DEFAULT ''");
       await db.execute("ALTER TABLE products ADD COLUMN source TEXT NOT NULL DEFAULT ''");
       await db.execute("ALTER TABLE products ADD COLUMN available_pack_types TEXT NOT NULL DEFAULT '[]'");
+      await db.execute("ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE products ADD COLUMN main_category TEXT NOT NULL DEFAULT ''");
+    }
+    // v2→v3: ensure product_type/main_category exist (some v2 DBs built without them)
+    if (oldVersion < 3) {
+      try { await db.execute("ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+      try { await db.execute("ALTER TABLE products ADD COLUMN main_category TEXT NOT NULL DEFAULT ''"); } catch (_) {}
     }
   }
 
@@ -230,6 +260,8 @@ class DatabaseService {
       'standard_drinks': (json['standardDrinks'] ?? '').toString(),
       'wine_body': (json['wineBody'] ?? '').toString(),
       'wine_sweetness': (json['wineSweetness'] ?? '').toString(),
+      'product_type': (json['productType'] ?? '').toString(),
+      'main_category': (json['mainCategory'] ?? '').toString(),
       'avg_rating': json['averageRating'] ?? 0,
       'review_count': json['totalReviewCount'] ?? 0,
       'categories': jsonEncode(json['categories'] ?? []),
@@ -297,6 +329,76 @@ class DatabaseService {
     }
 
     return results.take(30).toList();
+  }
+
+  /// Filter-only search (no text query) — uses SQL WHERE on populated fields
+  Future<List<Product>> searchByFilter({
+    List<String> countries = const [],
+    List<String> categories = const [],
+    List<String> regions = const [],
+    bool inStockOnly = false,
+    bool newOnly = false,
+    int limit = 200,
+    int offset = 0,
+    String sortField = 'review_count',
+    String sortDir = 'DESC',
+  }) async {
+    final conditions = <String>[];
+    final args = <dynamic>[];
+
+    if (countries.isNotEmpty) {
+      final likes = countries.map((c) => 'country LIKE ?').join(' OR ');
+      conditions.add('($likes)');
+      args.addAll(countries.map((c) => '%$c%'));
+    }
+    // Categories: exact match on varietal, product_type, or main_category
+    if (categories.isNotEmpty) {
+      final likes = <String>[];
+      for (final c in categories) {
+        likes.add('(varietal = ? OR product_type = ? OR main_category = ?)');
+        args.addAll([c, c, c]);
+      }
+      conditions.add('(${likes.join(' OR ')})');
+    }
+    if (regions.isNotEmpty) {
+      final likes = regions.map((r) => 'region LIKE ?').join(' OR ');
+      conditions.add('($likes)');
+      args.addAll(regions.map((r) => '%$r%'));
+    }
+    if (inStockOnly) {
+      conditions.add('stock_on_hand > 0');
+    }
+    if (newOnly && _count > 0) {
+      final cutoff = DateTime.now().subtract(const Duration(days: 90)).toIso8601String();
+      conditions.add("first_seen >= '$cutoff'");
+    }
+
+    // Map sort field to SQL column
+    String orderBy;
+    switch (sortField) {
+      case 'price':
+        orderBy = "CAST(json_extract(prices, '\$[0].value') AS REAL) $sortDir";
+        break;
+      case 'title':
+        orderBy = "title $sortDir";
+        break;
+      case 'stock_on_hand':
+        orderBy = "stock_on_hand $sortDir";
+        break;
+      case 'review_count':
+      default:
+        orderBy = "review_count $sortDir";
+        break;
+    }
+
+    final where = conditions.isNotEmpty ? 'WHERE ${conditions.join(' AND ')}' : '';
+    final sql = 'SELECT * FROM products $where ORDER BY $orderBy LIMIT $limit OFFSET $offset';
+    final rows = await _db!.rawQuery(sql, args);
+    if (categories.isNotEmpty) {
+      final codes = rows.map((r) => r['stockcode']).take(5).join(', ');
+      print('[FILTER] cats=$categories sort=$sortField $sortDir -> first 5: $codes');
+    }
+    return rows.map((r) => _rowToProduct(r)).toList();
   }
 
   /// Fallback LIKE search for partial matches
@@ -434,6 +536,8 @@ class DatabaseService {
       standardDrinks: (row['standard_drinks'] ?? '').toString(),
       wineBody: row['wine_body'] as String? ?? '',
       wineSweetness: row['wine_sweetness'] as String? ?? '',
+      productType: row['product_type'] as String? ?? '',
+      mainCategory: row['main_category'] as String? ?? '',
       averageRating: (row['avg_rating'] as num?)?.toDouble(),
       totalReviewCount: row['review_count'] as int? ?? 0,
       prices: _parsePrices(row['prices'] as String?),
