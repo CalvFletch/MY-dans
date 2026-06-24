@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:dart_lz4/dart_lz4.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
 
 /// SQLite-backed product database.
@@ -78,6 +81,66 @@ class DatabaseService {
     if (_count == 0) {
       await _seedFromBundle();
     }
+  }
+
+  /// Our API — nightly-built catalog
+  static const _apiVersionUrl = 'https://mydans.calvfletch.dev/api/db/version';
+  static const _apiDownloadUrl =
+      'https://mydans.calvfletch.dev/api/db/download';
+
+  /// Check our API for a newer DB and download if available.
+  /// Returns true if an update was applied.
+  Future<bool> checkRemoteDb() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final currentVersion = prefs.getString('db_version') ?? '';
+
+      // Check version
+      final resp = await http.get(Uri.parse(_apiVersionUrl));
+      if (resp.statusCode != 200) return false;
+
+      final info = json.decode(resp.body);
+      final version = info['version'] as String? ?? '';
+      if (version.isEmpty || version == currentVersion) return false;
+
+      // Download compressed DB
+      final dbResp = await http.get(Uri.parse(_apiDownloadUrl));
+      if (dbResp.statusCode != 200) return false;
+
+      final bytes = dbResp.bodyBytes;
+      final origSize =
+          (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+      final decompressed = lz4Decompress(
+        bytes.sublist(4),
+        decompressedSize: origSize,
+      );
+
+      final dbDir = await getDatabasesPath();
+      final dbFile = p.join(dbDir, 'mydans.db');
+
+      // Close current DB, replace, reopen
+      await _db?.close();
+      await File(dbFile).writeAsBytes(decompressed);
+      await _open();
+      await prefs.setString('db_version', version);
+
+      print('[SQLite] Updated from API $version — $_count products');
+      return true;
+    } catch (e) {
+      print('[SQLite] Remote update check failed: $e');
+      return false;
+    }
+  }
+
+  /// Export the current SQLite DB as a compressed LZ4 file.
+  Future<Uint8List> exportDb() async {
+    final dbDir = await getDatabasesPath();
+    final dbFile = p.join(dbDir, 'mydans.db');
+    final bytes = await File(dbFile).readAsBytes();
+    final compressed = lz4Compress(bytes);
+    final header = Uint8List(4);
+    ByteData.view(header.buffer).setUint32(0, bytes.length, Endian.big);
+    return Uint8List.fromList(header + compressed);
   }
 
   Future<void> _createTables(Database db, int version) async {
@@ -349,6 +412,25 @@ class DatabaseService {
         _count;
   }
 
+  /// Remove a product by stock code
+  Future<void> removeProduct(String stockcode) async {
+    await _db!.delete(
+      'products',
+      where: 'stockcode = ?',
+      whereArgs: [stockcode],
+    );
+    await _db!.delete(
+      'products_fts',
+      where: 'stockcode = ?',
+      whereArgs: [stockcode],
+    );
+    _count =
+        Sqflite.firstIntValue(
+          await _db!.rawQuery('SELECT COUNT(*) FROM products'),
+        ) ??
+        _count;
+  }
+
   /// Batch-insert many products (from scraper output)
   Future<void> bulkInsert(Map<String, Map<String, dynamic>> products) async {
     final batch = _db!.batch();
@@ -507,7 +589,7 @@ class DatabaseService {
     }
     if (tags.isNotEmpty) {
       for (final tag in tags) {
-        conditions.add("product_tags LIKE '%__${tag}.png%'");
+        conditions.add("product_tags LIKE '%__$tag.png%'");
       }
     }
 

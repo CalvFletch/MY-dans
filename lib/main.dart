@@ -1,6 +1,5 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'screens/search_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
@@ -8,6 +7,7 @@ import 'services/cache_service.dart';
 import 'services/search_service.dart';
 import 'services/database_service.dart';
 import 'services/background_service.dart';
+import 'services/sync_service.dart';
 
 // Brand colors
 class AppColors {
@@ -37,32 +37,11 @@ void main() async {
 
   await DatabaseService.init();
   await SearchService.init();
-  _detectProxy(); // try to find PC proxy for API access
-  BackgroundUpdater.checkAndRun(); // non-blocking daily update
+  await SyncService.init(); // WorkManager background sync
+  SyncService.schedule(); // schedule nightly task
+  BackgroundUpdater.checkAndRun();
+  BackgroundUpdater.syncCatalogIfScheduled();
   runApp(const MyDansApp());
-}
-
-/// Try to detect the PC proxy for API access through VPN
-void _detectProxy() async {
-  // Common local IPs for the dev PC
-  const candidates = [
-    'http://192.168.1.209:8080',
-    'http://10.39.98.199:8080',
-    'http://localhost:8080',
-  ];
-  for (final url in candidates) {
-    try {
-      final resp = await http
-          .get(Uri.parse('$url/health'))
-          .timeout(const Duration(seconds: 2));
-      if (resp.statusCode == 200) {
-        ApiService.proxyBase = url;
-        print('[PROXY] Found at $url');
-        return;
-      }
-    } catch (_) {}
-  }
-  print('[PROXY] Not found — web search may not work');
 }
 
 class MyDansApp extends StatefulWidget {
@@ -74,7 +53,7 @@ class MyDansApp extends StatefulWidget {
 
 class _MyDansAppState extends State<MyDansApp> {
   bool _darkMode = false;
-  int _catalogCount = 0;
+  final int _catalogCount = 0;
 
   @override
   void initState() {
@@ -173,10 +152,12 @@ class _HomeScreenState extends State<HomeScreen> {
           const NavigationDestination(
             icon: Icon(Icons.search),
             selectedIcon: Icon(Icons.search, color: AppColors.highlight),
+            label: 'Search',
           ),
           NavigationDestination(
             icon: _buildSettingsIcon(false),
             selectedIcon: _buildSettingsIcon(true),
+            label: 'Settings',
           ),
         ],
       ),

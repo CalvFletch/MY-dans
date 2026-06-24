@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/cache_service.dart';
 import '../services/database_service.dart';
 import '../services/background_service.dart';
+import '../services/sync_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   final bool darkMode;
@@ -37,6 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, int> _catCounts = {};
   int _totalProducts = 0;
   int _inStock = 0;
+  int _syncHour = 2; // default 2am AWST
 
   @override
   void initState() {
@@ -44,6 +48,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadStore();
     _loadDailyInfo();
     _loadStats();
+    _loadSyncSettings();
     _searchController.addListener(_onSearchChanged);
   }
 
@@ -64,12 +69,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       stock += row['st'] as int;
       total += row['c'] as int;
     }
-    if (mounted)
+    if (mounted) {
       setState(() {
         _catCounts = counts;
         _totalProducts = total;
         _inStock = stock;
       });
+    }
   }
 
   Future<void> _loadDailyInfo() async {
@@ -83,6 +89,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _lastDailyRun = last;
       _estimatedCount = count;
     });
+  }
+
+  Future<void> _loadSyncSettings() async {
+    final h = await CacheService.getSyncHour();
+    if (mounted) setState(() => _syncHour = h);
   }
 
   Future<void> _runNow() async {
@@ -99,11 +110,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       await _loadDailyInfo();
     } finally {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _running = false;
           _dailyProgress = null;
         });
+      }
     }
   }
 
@@ -135,11 +147,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (q.isEmpty || q.length < 3) return;
     setState(() => _loading = true);
     final stores = await ApiService.searchStores(q);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _stores = stores;
         _loading = false;
       });
+    }
   }
 
   Future<void> _selectStore(Map<String, dynamic> store) async {
@@ -187,6 +200,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _section('Daily Updater', Icons.sync),
           const SizedBox(height: 6),
           _updaterCard(),
+          const SizedBox(height: 20),
+          _section('Nightly Sync', Icons.cloud_sync),
+          const SizedBox(height: 6),
+          _syncCard(),
           const SizedBox(height: 20),
           _section('Database', Icons.storage),
           const SizedBox(height: 6),
@@ -454,6 +471,119 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int get _totalNew =>
       _catCounts.values.fold(0, (a, b) => a + b) > 0 ? 504 : 504; // from build
 
+  Future<void> _exportDb() async {
+    try {
+      final data = await DatabaseService.instance.exportDb();
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/mydans_export.db.lz4');
+      await file.writeAsBytes(data);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Exported ${(data.length / 1024 / 1024).toStringAsFixed(1)} MB to ${file.path}',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+      }
+    }
+  }
+
+  // ── Nightly Sync ───────────────────────────
+
+  Widget _syncCard() {
+    final labels = {
+      -1: 'Manual only',
+      0: '12:00 AM AWST',
+      1: '1:00 AM AWST',
+      2: '2:00 AM AWST (default)',
+      3: '3:00 AM AWST',
+      4: '4:00 AM AWST',
+      22: '10:00 PM AWST',
+      23: '11:00 PM AWST',
+    };
+
+    return _card(
+      children: [
+        const Text(
+          'Nightly catalog sync from our API',
+          style: TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            const Icon(Icons.schedule, size: 20, color: AppColors.primary),
+            const SizedBox(width: 10),
+            const Text('Sync at: ', style: TextStyle(fontSize: 14)),
+            DropdownButton<int>(
+              value: _syncHour,
+              items: labels.entries.map((e) {
+                return DropdownMenuItem(
+                  value: e.key,
+                  child: Text(e.value, style: const TextStyle(fontSize: 14)),
+                );
+              }).toList(),
+              onChanged: (v) async {
+                if (v != null) {
+                  setState(() => _syncHour = v);
+                  await CacheService.setSyncHour(v);
+                  await SyncService.schedule(
+                    hour: v,
+                  ); // re-schedule background task
+                }
+              },
+              underline: const SizedBox(),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _syncHour == -1
+              ? 'Sync only when you tap "Check Now" below.'
+              : 'Downloads latest catalog at ${labels[_syncHour] ?? '???'} — ~64MB. '
+                    'WiFi only, works in background (no need to open app).',
+          style: const TextStyle(fontSize: 11, color: Colors.grey),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () async {
+                try {
+                  final ok = await DatabaseService.instance.checkRemoteDb();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok ? 'Catalog updated!' : 'Already up to date',
+                        ),
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+                  }
+                }
+              },
+              icon: const Icon(Icons.cloud_download, size: 18),
+              label: const Text('Sync Now'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   // ── Database ───────────────────────────────
 
   Widget _dbCard(bool isDark) {
@@ -469,9 +599,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // Summary row
         Row(
           children: [
-            _statBox('Total', '${_totalProducts}', AppColors.primary, isDark),
+            _statBox('Total', '$_totalProducts', AppColors.primary, isDark),
             const SizedBox(width: 8),
-            _statBox('In Stock', '${_inStock}', Colors.green, isDark),
+            _statBox('In Stock', '$_inStock', Colors.green, isDark),
             const SizedBox(width: 8),
             _statBox('Reviews', '8003', Colors.orange, isDark),
           ],
@@ -538,9 +668,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
         const SizedBox(height: 6),
-        Text(
-          'DB v5 • LZ4 12.7 MB • 22,946 products',
-          style: TextStyle(color: Colors.grey[400], fontSize: 11),
+        Row(
+          children: [
+            Text(
+              'DB v5 • LZ4 • $_totalProducts products',
+              style: TextStyle(color: Colors.grey[400], fontSize: 11),
+            ),
+            const Spacer(),
+            IconButton(
+              onPressed: _exportDb,
+              icon: const Icon(Icons.upload_file, size: 18),
+              tooltip: 'Export DB',
+              style: IconButton.styleFrom(
+                backgroundColor: AppColors.primary.withAlpha(25),
+                padding: const EdgeInsets.all(6),
+              ),
+            ),
+          ],
         ),
       ],
     );

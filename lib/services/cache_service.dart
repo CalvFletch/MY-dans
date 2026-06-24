@@ -10,6 +10,9 @@ class CacheService {
   static const _postcodeKey = 'postcode';
   static const _darkModeKey = 'dark_mode';
   static const _teamDiscountKey = 'team_discount';
+  static const _syncTimeKey = 'sync_time';
+  static const _lastSyncKey = 'last_sync_time';
+  static const _apiBaseKey = 'api_base_url';
   static const _cacheMaxAge = Duration(hours: 2);
 
   // --- Product Catalog Cache ---
@@ -104,6 +107,43 @@ class CacheService {
   static Future<void> setTeamDiscount(bool show) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_teamDiscountKey, show);
+  }
+
+  // --- Nightly Sync ---
+
+  /// Get preferred sync hour (0-23). Default 1 (1am). -1 = manual only.
+  static Future<int> getSyncHour() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_syncTimeKey) ?? 2;
+  }
+
+  static Future<void> setSyncHour(int hour) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_syncTimeKey, hour);
+  }
+
+  /// Last time a nightly sync completed
+  static Future<DateTime?> getLastSync() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ts = prefs.getInt(_lastSyncKey);
+    if (ts == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(ts);
+  }
+
+  static Future<void> setLastSync(DateTime time) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_lastSyncKey, time.millisecondsSinceEpoch);
+  }
+
+  /// API base URL for our backend
+  static Future<String> getApiBaseUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_apiBaseKey) ?? 'https://mydans.calvfletch.dev';
+  }
+
+  static Future<void> setApiBaseUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_apiBaseKey, url);
   }
 
   /// Check if a product has a team/member price from the API.
