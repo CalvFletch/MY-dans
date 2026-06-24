@@ -38,21 +38,40 @@ class _SearchScreenState extends State<SearchScreen> {
   /// Convert UI sort mode to DB sortField / sortDir
   String get _dbSortField {
     switch (_sortMode) {
-      case 'price_asc': case 'price_desc': return 'price';
-      case 'name_asc': case 'name_desc': return 'title';
-      case 'stock_first': return 'stock_on_hand';
-      case 'alcohol_asc': case 'alcohol_desc': case 'ppl_asc': case 'ppl_desc':
-      default: return 'review_count';
+      case 'price_asc':
+      case 'price_desc':
+        return 'price';
+      case 'name_asc':
+      case 'name_desc':
+        return 'title';
+      case 'stock_first':
+        return 'stock_on_hand';
+      case 'power_desc':
+        return 'power_score';
+      case 'alcohol_asc':
+      case 'alcohol_desc':
+      case 'ppl_asc':
+      case 'ppl_desc':
+      default:
+        return 'review_count';
     }
   }
+
   String get _dbSortDir {
     switch (_sortMode) {
-      case 'price_asc': case 'name_asc': case 'alcohol_asc': case 'ppl_asc': return 'ASC';
-      default: return 'DESC';
+      case 'price_asc':
+      case 'name_asc':
+      case 'alcohol_asc':
+      case 'ppl_asc':
+        return 'ASC';
+      default:
+        return 'DESC';
     }
   }
+
   /// True if sort can be done in SQL (price, title, stock, review_count)
-  bool get _sortInSql => !_sortMode.startsWith('ppl') && !_sortMode.startsWith('alcohol');
+  bool get _sortInSql =>
+      !_sortMode.startsWith('ppl') && !_sortMode.startsWith('alcohol');
 
   static const _categoryHierarchy = {
     'Wine': [
@@ -197,6 +216,7 @@ class _SearchScreenState extends State<SearchScreen> {
     'alcohol_asc': 'ABV ↑',
     'alcohol_desc': 'ABV ↓',
     'stock_first': 'In Stock',
+    'power_desc': 'Reviews',
   };
   static const _sortIcons = {
     'price_asc': Icons.arrow_upward,
@@ -215,6 +235,7 @@ class _SearchScreenState extends State<SearchScreen> {
     'name': ['name_asc', 'name_desc'],
     'abv': ['alcohol_asc', 'alcohol_desc'],
     'stock': ['stock_first'],
+    'reviews': ['power_desc'],
   };
 
   void _cycleSort(String key) {
@@ -295,29 +316,39 @@ class _SearchScreenState extends State<SearchScreen> {
         products.sort((a, b) => b.title.compareTo(a.title));
         break;
       case 'alcohol_asc':
-        products.sort(
-          (a, b) => (double.tryParse(a.alcoholVolume.replaceAll('%', '')) ?? 0)
-              .compareTo(
-                double.tryParse(b.alcoholVolume.replaceAll('%', '')) ?? 0,
-              ),
-        );
+        final cache = <Product, double>{};
+        for (final p in products) {
+          cache[p] = double.tryParse(p.alcoholVolume.replaceAll('%', '')) ?? 0;
+        }
+        products.sort((a, b) => cache[a]!.compareTo(cache[b]!));
         break;
       case 'alcohol_desc':
-        products.sort(
-          (a, b) => (double.tryParse(b.alcoholVolume.replaceAll('%', '')) ?? 0)
-              .compareTo(
-                double.tryParse(a.alcoholVolume.replaceAll('%', '')) ?? 0,
-              ),
-        );
+        final cache = <Product, double>{};
+        for (final p in products) {
+          cache[p] = double.tryParse(p.alcoholVolume.replaceAll('%', '')) ?? 0;
+        }
+        products.sort((a, b) => cache[b]!.compareTo(cache[a]!));
         break;
       case 'stock_first':
         products.sort((a, b) => b.stockOnHand.compareTo(a.stockOnHand));
         break;
       case 'ppl_asc':
-        products.sort((a, b) => (_ppl(a) ?? double.infinity).compareTo(_ppl(b) ?? double.infinity));
+        final cache = <Product, double?>{};
+        for (final p in products) {
+          cache[p] = _ppl(p);
+        }
+        products.sort(
+          (a, b) => (cache[a] ?? double.infinity).compareTo(
+            cache[b] ?? double.infinity,
+          ),
+        );
         break;
       case 'ppl_desc':
-        products.sort((a, b) => (_ppl(b) ?? 0).compareTo(_ppl(a) ?? 0));
+        final cache = <Product, double?>{};
+        for (final p in products) {
+          cache[p] = _ppl(p);
+        }
+        products.sort((a, b) => (cache[b] ?? 0).compareTo(cache[a] ?? 0));
         break;
     }
     return products;
@@ -355,25 +386,31 @@ class _SearchScreenState extends State<SearchScreen> {
     if (_loadingMore || !_hasMore) return;
     setState(() => _loadingMore = true);
     _filterOffset += _filterPageSize;
-    DatabaseService.instance.searchByFilter(
-      countries: _filters.countries.toList(),
-      categories: _filters.categories.toList(),
-      regions: _filters.regions.toList(),
-      inStockOnly: _filters.inStockOnly,
-      newOnly: _filters.newOnly,
-      limit: _filterPageSize,
-      offset: _filterOffset,
-      sortField: _dbSortField,
-      sortDir: _dbSortDir,
-    ).then((results) {
-      if (!mounted) return;
-      setState(() {
-        _allResults.addAll(results);
-        _results = _sortInSql ? List.from(_allResults) : _applySort(List.from(_allResults));
-        _loadingMore = false;
-        _hasMore = results.length >= _filterPageSize;
-      });
-    });
+    DatabaseService.instance
+        .searchByFilter(
+          countries: _filters.countries.toList(),
+          categories: _filters.categories.toList(),
+          regions: _filters.regions.toList(),
+          inStockOnly: _filters.inStockOnly,
+          newOnly: _filters.newOnly,
+          hideUnavailable: _filters.hideUnavailable,
+          tags: _filters.tags.toList(),
+          limit: _filterPageSize,
+          offset: _filterOffset,
+          sortField: _dbSortField,
+          sortDir: _dbSortDir,
+        )
+        .then((results) {
+          if (!mounted) return;
+          setState(() {
+            _allResults.addAll(results);
+            _results = _sortInSql
+                ? List.from(_allResults)
+                : _applySort(List.from(_allResults));
+            _loadingMore = false;
+            _hasMore = results.length >= _filterPageSize;
+          });
+        });
   }
 
   Widget _buildEmptyState() {
@@ -499,15 +536,21 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
-        !_loadingMore && _hasMore && _controller.text.trim().isEmpty && _filters.isActive) {
+    if (_scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 200 &&
+        !_loadingMore &&
+        _hasMore &&
+        _controller.text.trim().isEmpty &&
+        _filters.isActive) {
       _loadMoreFilterResults();
     }
   }
 
   Future<void> _loadSettings() async {
-    _showTeamPrices = await CacheService.getTeamDiscount();
-    if (mounted) setState(() {});
+    final showTeam = await CacheService.getTeamDiscount();
+    if (showTeam != _showTeamPrices && mounted) {
+      setState(() => _showTeamPrices = showTeam);
+    }
   }
 
   void _onSearchChanged() {
@@ -542,27 +585,31 @@ class _SearchScreenState extends State<SearchScreen> {
         _filterOffset = 0;
         _hasMore = true;
       });
-      DatabaseService.instance.searchByFilter(
-        countries: _filters.countries.toList(),
-        categories: cats,
-        regions: _filters.regions.toList(),
-        inStockOnly: _filters.inStockOnly,
-        newOnly: _filters.newOnly,
-        limit: _filterPageSize,
-        offset: 0,
-        sortField: _dbSortField,
-        sortDir: _dbSortDir,
-      ).then((results) {
-        if (!mounted) return;
-        // For PPL / ABV sorts, do Dart-side sort; otherwise SQL already sorted
-        final sorted = _sortInSql ? results : _applySort(results);
-        setState(() {
-          _allResults = results;
-          _results = sorted;
-          _loading = false;
-          _hasMore = results.length >= _filterPageSize;
-        });
-      });
+      DatabaseService.instance
+          .searchByFilter(
+            countries: _filters.countries.toList(),
+            categories: cats,
+            regions: _filters.regions.toList(),
+            inStockOnly: _filters.inStockOnly,
+            newOnly: _filters.newOnly,
+            hideUnavailable: _filters.hideUnavailable,
+            tags: _filters.tags.toList(),
+            limit: _filterPageSize,
+            offset: 0,
+            sortField: _dbSortField,
+            sortDir: _dbSortDir,
+          )
+          .then((results) {
+            if (!mounted) return;
+            // For PPL / ABV sorts, do Dart-side sort; otherwise SQL already sorted
+            final sorted = _sortInSql ? results : _applySort(results);
+            setState(() {
+              _allResults = results;
+              _results = sorted;
+              _loading = false;
+              _hasMore = results.length >= _filterPageSize;
+            });
+          });
       return;
     }
 
@@ -583,9 +630,10 @@ class _SearchScreenState extends State<SearchScreen> {
         if (!mounted) return;
         // Quietly re-query local DB — no _loading toggle, no web re-fetch
         final updated =
-            DatabaseService.instance.isReady && DatabaseService.instance.count > 0
-                ? await DatabaseService.instance.search(query)
-                : <Product>[];
+            DatabaseService.instance.isReady &&
+                DatabaseService.instance.count > 0
+            ? await DatabaseService.instance.search(query)
+            : <Product>[];
         if (!mounted) return;
         if (updated.isNotEmpty) {
           setState(() {
@@ -627,14 +675,19 @@ class _SearchScreenState extends State<SearchScreen> {
       _filters.regions.addAll(result.regions);
       _filters.categories.clear();
       _filters.categories.addAll(result.categories);
+      _filters.tags.clear();
+      _filters.tags.addAll(result.tags);
       _filters.inStockOnly = result.inStockOnly;
       _filters.hideOnline = result.hideOnline;
       _filters.newOnly = result.newOnly;
+      _filters.hideUnavailable = result.hideUnavailable;
       _filters.categoryAnd = result.categoryAnd;
       _filters.countryAnd = result.countryAnd;
 
       // Strip parent categories (e.g. if "Shiraz" selected, remove "Wine"/"Red Wine")
-      final cleanCategories = _stripParentCategories(result.categories.toList());
+      final cleanCategories = _stripParentCategories(
+        result.categories.toList(),
+      );
 
       if (_controller.text.trim().isEmpty) {
         _search(overrideCategories: cleanCategories);
@@ -680,7 +733,9 @@ class _SearchScreenState extends State<SearchScreen> {
           : null,
       side: active
           ? BorderSide(
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+              color: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: 0.4),
             )
           : null,
     );
@@ -830,7 +885,7 @@ class _SearchScreenState extends State<SearchScreen> {
         title: Align(
           alignment: Alignment.centerLeft,
           child: SvgPicture.asset(
-            'assets/dans-header-banner-1.svg',
+            'assets/MY-dans-header-banner.svg',
             height: 52,
           ),
         ),
@@ -951,6 +1006,7 @@ class _SearchScreenState extends State<SearchScreen> {
                       _sortChip('Name', 'name'),
                       _sortChip('ABV', 'abv'),
                       _sortChip('In Stock', 'stock'),
+                      _sortChip('Reviews', 'reviews'),
                     ],
                   ),
                 ),
@@ -966,15 +1022,24 @@ class _SearchScreenState extends State<SearchScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.search_off, size: 48, color: Colors.grey[400]),
+                        Icon(
+                          Icons.search_off,
+                          size: 48,
+                          color: Colors.grey[400],
+                        ),
                         const SizedBox(height: 8),
-                        Text(_error!, style: TextStyle(color: Colors.grey[600])),
+                        Text(
+                          _error!,
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
                       ],
                     ),
                   )
                 : _loading
                 ? const Center(child: CircularProgressIndicator())
-                : _controller.text.isEmpty && _results.isEmpty && !_filters.isActive
+                : _controller.text.isEmpty &&
+                      _results.isEmpty &&
+                      !_filters.isActive
                 ? _buildEmptyState()
                 : _results.isEmpty && !_loading
                 ? const SizedBox.shrink()

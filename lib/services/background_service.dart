@@ -12,13 +12,16 @@ class BackgroundUpdater {
   static const _lastRunKey = 'daily_update_last_run';
   static const _reviewThresholdKey = 'daily_review_threshold';
 
-  static Future<void> checkAndRun() async {
+  static Future<void> checkAndRun({
+    bool force = false,
+    void Function(int done, int total)? onProgress,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     final lastRun = prefs.getString(_lastRunKey);
     final now = DateTime.now();
 
-    // Run if never run or >22h since last run
-    if (lastRun != null) {
+    // Run if never run or >22h since last run (or forced)
+    if (!force && lastRun != null) {
       final last = DateTime.tryParse(lastRun);
       if (last != null && now.difference(last).inHours < 22) {
         print('[DAILY] Skipped — last run ${last.toString().substring(0, 16)}');
@@ -30,9 +33,9 @@ class BackgroundUpdater {
     await prefs.setString(_lastRunKey, now.toIso8601String());
 
     try {
-      final reviewThreshold = prefs.getInt(_reviewThresholdKey) ?? 300;
+      final reviewThreshold = prefs.getInt(_reviewThresholdKey) ?? 100;
       final storeNo = await _getStoreNo();
-      await _runUpdate(reviewThreshold, storeNo, prefs);
+      await _runUpdate(reviewThreshold, storeNo, prefs, onProgress);
     } catch (e) {
       print('[DAILY] Error: $e');
     }
@@ -42,6 +45,7 @@ class BackgroundUpdater {
     int threshold,
     String storeNo,
     SharedPreferences prefs,
+    void Function(int done, int total)? onProgress,
   ) async {
     final headers = {
       'Ocp-Apim-Subscription-Key': 'REDACTED3b914654a250e79d62250776',
@@ -81,7 +85,7 @@ class BackgroundUpdater {
     }
     print('[DAILY] Catalog: ${currentCodes.length} codes');
 
-    // Step 2: Find new codes + popular codes (via SQLite)
+    // Step 2: Find new codes + popular codes (100+ reviews)
     final newCodes = <String>[];
     final popularCodes = <String>[];
     for (final code in currentCodes) {
@@ -145,6 +149,7 @@ class BackgroundUpdater {
                 : _extractPriceOnly(p, code, ad, priceMap);
             await dbService.upsertProduct(code, data);
             fetched++;
+            onProgress?.call(fetched, toFetch.length);
           }
         } else if (r.statusCode == 429) {
           await Future.delayed(const Duration(seconds: 30));
@@ -166,7 +171,7 @@ class BackgroundUpdater {
 
   static Future<int> getReviewThreshold() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_reviewThresholdKey) ?? 300;
+    return prefs.getInt(_reviewThresholdKey) ?? 100;
   }
 
   static Future<void> setReviewThreshold(int value) async {
@@ -180,19 +185,14 @@ class BackgroundUpdater {
     return s != null ? DateTime.tryParse(s) : null;
   }
 
-  /// Estimate how many cached products have ≥N reviews
+  /// Estimate how many products would be checked daily (new + popular)
   static Future<int> estimateProductCount(int threshold) async {
-    final prefs = await SharedPreferences.getInstance();
-    final cacheRaw = prefs.getString('product_cache') ?? '{}';
-    final Map<String, dynamic> cache =
-        json.decode(cacheRaw) as Map<String, dynamic>;
-    int count = 0;
-    for (final entry in cache.values) {
-      final p = entry as Map<String, dynamic>;
-      final reviews = p['totalReviewCount'] as int? ?? 0;
-      if (reviews >= threshold) count++;
-    }
-    return count;
+    if (!DatabaseService.instance.isReady) return 0;
+    final r = await DatabaseService.instance.db.rawQuery(
+      'SELECT COUNT(*) as c FROM products WHERE is_new = 1 OR review_count >= ?',
+      [threshold],
+    );
+    return (r.first['c'] as int?) ?? 0;
   }
 
   /// Extract full product data for NEW products
@@ -269,7 +269,9 @@ class BackgroundUpdater {
     };
   }
 
-  static List<Map<String, dynamic>> _parsePrices(Map<String, dynamic> priceMap) {
+  static List<Map<String, dynamic>> _parsePrices(
+    Map<String, dynamic> priceMap,
+  ) {
     final prices = <Map<String, dynamic>>[];
     for (final entry in priceMap.entries) {
       final pd = entry.value as Map<String, dynamic>?;

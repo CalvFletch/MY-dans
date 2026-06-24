@@ -259,7 +259,7 @@ class SearchService {
     } else {
       _db[incoming.stockcode] = incoming;
     }
-    CacheService.saveProductDb(_db);
+    // NOTE: SQLite is source of truth — no SharedPreferences save needed
   }
 
   /// Hydrate live data for a product. Skips API call if data is fresh.
@@ -267,9 +267,11 @@ class SearchService {
   /// - All other fields: refreshed if older than 24 hours
   static Future<Product> hydrate(Product p, {String? storeNo}) async {
     final now = DateTime.now();
-    final priceStale = p.lastPriceRefresh == null ||
+    final priceStale =
+        p.lastPriceRefresh == null ||
         now.difference(p.lastPriceRefresh!).inMinutes >= 5;
-    final detailStale = p.lastDetailRefresh == null ||
+    final detailStale =
+        p.lastDetailRefresh == null ||
         now.difference(p.lastDetailRefresh!).inHours >= 24;
 
     if (!priceStale && !detailStale) return p; // fully fresh
@@ -302,7 +304,9 @@ class SearchService {
       wineBody: detailStale ? live.wineBody : p.wineBody,
       wineSweetness: detailStale ? live.wineSweetness : p.wineSweetness,
       averageRating: detailStale ? live.averageRating : p.averageRating,
-      totalReviewCount: detailStale ? live.totalReviewCount : p.totalReviewCount,
+      totalReviewCount: detailStale
+          ? live.totalReviewCount
+          : p.totalReviewCount,
       prices: priceStale ? live.prices : p.prices,
       stockOnHand: priceStale ? live.stockOnHand : p.stockOnHand,
       isPurchasable: priceStale ? live.isPurchasable : p.isPurchasable,
@@ -314,9 +318,17 @@ class SearchService {
       firstSeen: p.firstSeen,
       lastPriceRefresh: priceStale ? now : p.lastPriceRefresh,
       lastDetailRefresh: detailStale ? now : p.lastDetailRefresh,
-      productTags: detailStale ? live.productTags : p.productTags,
-      productSashes: detailStale ? live.productSashes : p.productSashes,
-      availablePackTypes: priceStale ? live.availablePackTypes : p.availablePackTypes,
+      productTags: detailStale
+          ? (live.productTags.isNotEmpty ? live.productTags : p.productTags)
+          : p.productTags,
+      productSashes: detailStale
+          ? (live.productSashes.isNotEmpty
+                ? live.productSashes
+                : p.productSashes)
+          : p.productSashes,
+      availablePackTypes: priceStale
+          ? live.availablePackTypes
+          : p.availablePackTypes,
     );
 
     _cacheProduct(updated);

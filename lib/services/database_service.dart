@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
+import 'package:dart_lz4/dart_lz4.dart';
 import '../models/product.dart';
 
 /// SQLite-backed product database.
@@ -30,21 +31,28 @@ class DatabaseService {
   Future<void> _open() async {
     final dbDir = await getDatabasesPath();
     final dbFile = p.join(dbDir, 'mydans.db');
-    
+
     // Copy pre-built DB from assets if not exists
     if (!File(dbFile).existsSync()) {
       try {
-        final data = await rootBundle.load('assets/mydans.db');
-        await File(dbFile).writeAsBytes(data.buffer.asUint8List());
-        print('[SQLite] Copied pre-built DB from assets');
+        final data = await rootBundle.load('assets/mydans.db.lz4');
+        final bytes = data.buffer.asUint8List();
+        final origSize =
+            (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+        final decompressed = lz4Decompress(
+          bytes.sublist(4),
+          decompressedSize: origSize,
+        );
+        await File(dbFile).writeAsBytes(decompressed);
+        print('[SQLite] Copied pre-built DB from assets (LZ4)');
       } catch (e) {
         print('[SQLite] No pre-built DB: $e');
       }
     }
-    
+
     _db = await openDatabase(
       dbFile,
-      version: 3,
+      version: 5,
       onCreate: _createTables,
       onUpgrade: _migrate,
     );
@@ -58,12 +66,14 @@ class DatabaseService {
 
     // Build FTS index if missing (desktop SQLite skips FTS4)
     try {
-      await _db!.execute('CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts4(stockcode, title, brand, description)');
+      await _db!.execute(
+        'CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts4(stockcode, title, brand, description)',
+      );
       await _db!.rawQuery('SELECT COUNT(*) FROM products_fts').then((r) {
         if (Sqflite.firstIntValue(r) == 0) _rebuildFts();
       });
     } catch (_) {}
-    
+
     // If still empty, try legacy JSON seed
     if (_count == 0) {
       await _seedFromBundle();
@@ -112,13 +122,44 @@ class DatabaseService {
         parent_stockcode  TEXT NOT NULL DEFAULT '',
         source            TEXT NOT NULL DEFAULT '',
         available_pack_types TEXT NOT NULL DEFAULT '[]',
-        first_seen        TEXT
+        first_seen        TEXT,
+        min_price         REAL NOT NULL DEFAULT 0,
+        url_friendly_name TEXT NOT NULL DEFAULT '',
+        pack_type         TEXT NOT NULL DEFAULT '',
+        spirit_style      TEXT NOT NULL DEFAULT '',
+        whisky_style      TEXT NOT NULL DEFAULT '',
+        vendor_name       TEXT NOT NULL DEFAULT '',
+        vendor_id         TEXT NOT NULL DEFAULT '',
+        overall_rating    REAL NOT NULL DEFAULT 0,
+        number_of_reviews INTEGER NOT NULL DEFAULT 0,
+        is_vegan          INTEGER NOT NULL DEFAULT 0,
+        is_gluten_free    INTEGER NOT NULL DEFAULT 0,
+        food_match        TEXT NOT NULL DEFAULT '',
+        winemaker         TEXT NOT NULL DEFAULT '',
+        award_winner      TEXT NOT NULL DEFAULT '',
+        is_new            INTEGER NOT NULL DEFAULT 0,
+        is_featured_tag   INTEGER NOT NULL DEFAULT 0,
+        is_for_delivery   INTEGER NOT NULL DEFAULT 0,
+        is_for_collection INTEGER NOT NULL DEFAULT 0,
+        is_pre_sale       INTEGER NOT NULL DEFAULT 0,
+        is_coming_soon    INTEGER NOT NULL DEFAULT 0,
+        supply_limit      INTEGER NOT NULL DEFAULT 9999,
+        minimum_quantity  INTEGER NOT NULL DEFAULT 1,
+        display_quantity  INTEGER NOT NULL DEFAULT 1,
+        inventory         TEXT NOT NULL DEFAULT '{}',
+        info_message      TEXT NOT NULL DEFAULT '{}',
+        alc_vol_message   TEXT NOT NULL DEFAULT '{}',
+        usp               TEXT NOT NULL DEFAULT '[]',
+        last_refreshed    TEXT,
+        power_score       REAL NOT NULL DEFAULT 0
       )
     ''');
 
     await db.execute('CREATE INDEX idx_p_brand ON products(brand)');
     await db.execute('CREATE INDEX idx_p_country ON products(country)');
-    await db.execute('CREATE INDEX idx_p_review_count ON products(review_count)');
+    await db.execute(
+      'CREATE INDEX idx_p_review_count ON products(review_count)',
+    );
 
     await db.execute('''
       CREATE VIRTUAL TABLE products_fts USING fts4(
@@ -135,7 +176,9 @@ class DatabaseService {
         recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     ''');
-    await db.execute('CREATE INDEX idx_ph_stockcode ON price_history(stockcode)');
+    await db.execute(
+      'CREATE INDEX idx_ph_stockcode ON price_history(stockcode)',
+    );
 
     await db.execute('''
       CREATE TABLE previous_titles (
@@ -151,24 +194,110 @@ class DatabaseService {
 
   Future<void> _migrate(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      await db.execute("ALTER TABLE products ADD COLUMN backorder_stock INTEGER NOT NULL DEFAULT 0");
-      await db.execute("ALTER TABLE products ADD COLUMN backorder_message TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE products ADD COLUMN is_delivery_only INTEGER NOT NULL DEFAULT 0");
-      await db.execute("ALTER TABLE products ADD COLUMN is_edr_special INTEGER NOT NULL DEFAULT 0");
-      await db.execute("ALTER TABLE products ADD COLUMN is_find_me_avail INTEGER NOT NULL DEFAULT 0");
-      await db.execute("ALTER TABLE products ADD COLUMN age_restricted INTEGER NOT NULL DEFAULT 0");
-      await db.execute("ALTER TABLE products ADD COLUMN unit TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE products ADD COLUMN pkg_size_display TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE products ADD COLUMN parent_stockcode TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE products ADD COLUMN source TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE products ADD COLUMN available_pack_types TEXT NOT NULL DEFAULT '[]'");
-      await db.execute("ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE products ADD COLUMN main_category TEXT NOT NULL DEFAULT ''");
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN backorder_stock INTEGER NOT NULL DEFAULT 0",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN backorder_message TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN is_delivery_only INTEGER NOT NULL DEFAULT 0",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN is_edr_special INTEGER NOT NULL DEFAULT 0",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN is_find_me_avail INTEGER NOT NULL DEFAULT 0",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN age_restricted INTEGER NOT NULL DEFAULT 0",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN unit TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN pkg_size_display TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN parent_stockcode TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN available_pack_types TEXT NOT NULL DEFAULT '[]'",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE products ADD COLUMN main_category TEXT NOT NULL DEFAULT ''",
+      );
     }
     // v2→v3: ensure product_type/main_category exist (some v2 DBs built without them)
     if (oldVersion < 3) {
-      try { await db.execute("ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT ''"); } catch (_) {}
-      try { await db.execute("ALTER TABLE products ADD COLUMN main_category TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+      try {
+        await db.execute(
+          "ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT ''",
+        );
+      } catch (_) {}
+      try {
+        await db.execute(
+          "ALTER TABLE products ADD COLUMN main_category TEXT NOT NULL DEFAULT ''",
+        );
+      } catch (_) {}
+    }
+    // v3→v4: min_price for unit-price sorting
+    if (oldVersion < 4) {
+      try {
+        await db.execute(
+          "ALTER TABLE products ADD COLUMN min_price REAL NOT NULL DEFAULT 0",
+        );
+        // Compute min_price from existing price JSON (excludes Case packs)
+        await db.rawUpdate(
+          "UPDATE products SET min_price = COALESCE("
+          "(SELECT MIN(CAST(json_extract(value, '\$.value') AS REAL)) "
+          "FROM json_each(prices) "
+          "WHERE CAST(json_extract(value, '\$.value') AS REAL) > 0 "
+          "AND json_extract(value, '\$.packType') != 'Case'), 0)",
+        );
+      } catch (_) {}
+    }
+    // v4→v5: all scraper fields
+    if (oldVersion < 5) {
+      final cols = [
+        "url_friendly_name TEXT NOT NULL DEFAULT ''",
+        "pack_type TEXT NOT NULL DEFAULT ''",
+        "spirit_style TEXT NOT NULL DEFAULT ''",
+        "whisky_style TEXT NOT NULL DEFAULT ''",
+        "vendor_name TEXT NOT NULL DEFAULT ''",
+        "vendor_id TEXT NOT NULL DEFAULT ''",
+        "overall_rating REAL NOT NULL DEFAULT 0",
+        "number_of_reviews INTEGER NOT NULL DEFAULT 0",
+        "is_vegan INTEGER NOT NULL DEFAULT 0",
+        "is_gluten_free INTEGER NOT NULL DEFAULT 0",
+        "food_match TEXT NOT NULL DEFAULT ''",
+        "winemaker TEXT NOT NULL DEFAULT ''",
+        "award_winner TEXT NOT NULL DEFAULT ''",
+        "is_new INTEGER NOT NULL DEFAULT 0",
+        "is_featured_tag INTEGER NOT NULL DEFAULT 0",
+        "is_for_delivery INTEGER NOT NULL DEFAULT 0",
+        "is_for_collection INTEGER NOT NULL DEFAULT 0",
+        "is_pre_sale INTEGER NOT NULL DEFAULT 0",
+        "is_coming_soon INTEGER NOT NULL DEFAULT 0",
+        "supply_limit INTEGER NOT NULL DEFAULT 9999",
+        "minimum_quantity INTEGER NOT NULL DEFAULT 1",
+        "display_quantity INTEGER NOT NULL DEFAULT 1",
+        "inventory TEXT NOT NULL DEFAULT '{}'",
+        "info_message TEXT NOT NULL DEFAULT '{}'",
+        "alc_vol_message TEXT NOT NULL DEFAULT '{}'",
+        "usp TEXT NOT NULL DEFAULT '[]'",
+      ];
+      for (final c in cols) {
+        try {
+          await db.execute("ALTER TABLE products ADD COLUMN $c");
+        } catch (_) {}
+      }
     }
   }
 
@@ -336,8 +465,10 @@ class DatabaseService {
     List<String> countries = const [],
     List<String> categories = const [],
     List<String> regions = const [],
+    List<String> tags = const [],
     bool inStockOnly = false,
     bool newOnly = false,
+    bool hideUnavailable = false,
     int limit = 200,
     int offset = 0,
     String sortField = 'review_count',
@@ -368,16 +499,25 @@ class DatabaseService {
     if (inStockOnly) {
       conditions.add('stock_on_hand > 0');
     }
-    if (newOnly && _count > 0) {
-      final cutoff = DateTime.now().subtract(const Duration(days: 90)).toIso8601String();
-      conditions.add("first_seen >= '$cutoff'");
+    if (hideUnavailable) {
+      conditions.add('min_price > 0');
+    }
+    if (newOnly) {
+      conditions.add('is_new = 1');
+    }
+    if (tags.isNotEmpty) {
+      for (final tag in tags) {
+        conditions.add("product_tags LIKE '%__${tag}.png%'");
+      }
     }
 
     // Map sort field to SQL column
     String orderBy;
     switch (sortField) {
       case 'price':
-        orderBy = "CAST(json_extract(prices, '\$[0].value') AS REAL) $sortDir";
+        // Sort by min_price (individual unit price, no cases) — push $0 to end
+        orderBy =
+            "CASE WHEN min_price <= 0 THEN 1 ELSE 0 END, min_price $sortDir";
         break;
       case 'title':
         orderBy = "title $sortDir";
@@ -386,17 +526,27 @@ class DatabaseService {
         orderBy = "stock_on_hand $sortDir";
         break;
       case 'review_count':
+        orderBy = "review_count $sortDir";
+        break;
+      case 'power_score':
+        orderBy = "power_score $sortDir";
+        break;
       default:
         orderBy = "review_count $sortDir";
         break;
     }
 
-    final where = conditions.isNotEmpty ? 'WHERE ${conditions.join(' AND ')}' : '';
-    final sql = 'SELECT * FROM products $where ORDER BY $orderBy LIMIT $limit OFFSET $offset';
+    final where = conditions.isNotEmpty
+        ? 'WHERE ${conditions.join(' AND ')}'
+        : '';
+    final sql =
+        'SELECT * FROM products $where ORDER BY $orderBy LIMIT $limit OFFSET $offset';
     final rows = await _db!.rawQuery(sql, args);
     if (categories.isNotEmpty) {
       final codes = rows.map((r) => r['stockcode']).take(5).join(', ');
-      print('[FILTER] cats=$categories sort=$sortField $sortDir -> first 5: $codes');
+      print(
+        '[FILTER] cats=$categories sort=$sortField $sortDir -> first 5: $codes',
+      );
     }
     return rows.map((r) => _rowToProduct(r)).toList();
   }
@@ -425,6 +575,28 @@ class DatabaseService {
     );
     if (rows.isEmpty) return null;
     return _rowToProduct(rows.first);
+  }
+
+  /// Check if product needs refresh (>24h since last_refreshed)
+  Future<bool> shouldRefresh(String stockcode) async {
+    final rows = await _db!.rawQuery(
+      "SELECT last_refreshed FROM products WHERE stockcode = ?",
+      [stockcode],
+    );
+    if (rows.isEmpty) return true;
+    final lr = rows.first['last_refreshed'] as String?;
+    if (lr == null || lr.isEmpty) return true;
+    final last = DateTime.tryParse(lr);
+    if (last == null) return true;
+    return DateTime.now().difference(last).inHours >= 22;
+  }
+
+  /// Update product with fresh API data
+  Future<void> markRefreshed(String stockcode) async {
+    await _db!.rawUpdate(
+      "UPDATE products SET last_refreshed = ? WHERE stockcode = ?",
+      [DateTime.now().toIso8601String(), stockcode],
+    );
   }
 
   /// Get products matching category filter
@@ -548,7 +720,9 @@ class DatabaseService {
       categories: categories,
       productTags: _parseJsonList(row['product_tags'] as String?),
       productSashes: _parseJsonList(row['product_sashes'] as String?),
-      availablePackTypes: _parseJsonList(row['available_pack_types'] as String?),
+      availablePackTypes: _parseJsonList(
+        row['available_pack_types'] as String?,
+      ),
       backorderMessage: row['backorder_message'] as String? ?? '',
       isDeliveryOnly: row['is_delivery_only'] == 1,
       isEdrSpecial: row['is_edr_special'] == 1,
@@ -558,7 +732,9 @@ class DatabaseService {
       packageSizeDisplay: row['pkg_size_display'] as String? ?? '',
       parentStockCode: row['parent_stockcode'] as String? ?? '',
       source: row['source'] as String? ?? '',
-      firstSeen: row['first_seen'] != null ? DateTime.tryParse(row['first_seen'] as String) : null,
+      firstSeen: row['first_seen'] != null
+          ? DateTime.tryParse(row['first_seen'] as String)
+          : null,
     );
   }
 

@@ -48,8 +48,8 @@ class Product {
   final List<String> previousTitles;
   final List<PriceRecord> priceHistory;
   final DateTime? firstSeen;
-  final DateTime? lastPriceRefresh;   // when prices/stock last fetched live
-  final DateTime? lastDetailRefresh;  // when full detail last fetched
+  final DateTime? lastPriceRefresh; // when prices/stock last fetched live
+  final DateTime? lastDetailRefresh; // when full detail last fetched
   final List<Map<String, dynamic>> productTags;
   final List<Map<String, dynamic>> productSashes;
   final List<Map<String, dynamic>> availablePackTypes;
@@ -58,6 +58,7 @@ class Product {
   final bool isEdrSpecial;
   final bool isFindMeAvailable;
   final bool ageRestricted;
+  final int imageCount;
   final String unit;
   final String packageSizeDisplay;
   final String parentStockCode;
@@ -101,6 +102,17 @@ class Product {
     ...derivedBadges,
   ];
 
+  /// Parse tags/sashes from API (PascalCase) or cache (camelCase)
+  static List<Map<String, dynamic>> _parseTags(dynamic tags) {
+    if (tags == null) return [];
+    final list = tags is List ? tags : [];
+    return list
+        .map(
+          (e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{},
+        )
+        .toList();
+  }
+
   Product({
     required this.stockcode,
     required this.title,
@@ -141,6 +153,7 @@ class Product {
     this.isEdrSpecial = false,
     this.isFindMeAvailable = false,
     this.ageRestricted = false,
+    this.imageCount = 3,
     this.unit = '',
     this.packageSizeDisplay = '',
     this.parentStockCode = '',
@@ -240,27 +253,15 @@ class Product {
       lastDetailRefresh: json['lastDetailRefresh'] != null
           ? DateTime.tryParse(json['lastDetailRefresh'].toString())
           : null,
-      productTags:
-          (json['productTags'] as List<dynamic>?)
-              ?.map(
-                (e) => e is Map
-                    ? Map<String, dynamic>.from(e)
-                    : <String, dynamic>{},
-              )
-              .toList() ??
-          [],
-      productSashes:
-          (json['productSashes'] as List<dynamic>?)
-              ?.map(
-                (e) => e is Map
-                    ? Map<String, dynamic>.from(e)
-                    : <String, dynamic>{},
-              )
-              .toList() ??
-          [],
+      productTags: _parseTags(json['ProductTags'] ?? json['productTags']),
+      productSashes: _parseTags(json['ProductSashes'] ?? json['productSashes']),
       availablePackTypes:
           (json['availablePackTypes'] as List<dynamic>?)
-              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
               .toList() ??
           [],
       backorderMessage: (json['backorderMessage'] ?? '').toString(),
@@ -273,18 +274,30 @@ class Product {
       parentStockCode: (json['parentStockCode'] ?? '').toString(),
       productsInSameOffer:
           (json['productsInSameOffer'] as List<dynamic>?)
-              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
               .toList() ??
           [],
       recommendedProducts:
           (json['recommendedProducts'] as List<dynamic>?)
-              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
               .toList() ??
           [],
       source: (json['source'] ?? '').toString(),
       deliveryOptionsInfo:
           (json['deliveryOptionsInfo'] as List<dynamic>?)
-              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
               .toList() ??
           [],
     );
@@ -394,27 +407,15 @@ class Product {
       lastDetailRefresh: json['lastDetailRefresh'] != null
           ? DateTime.tryParse(json['lastDetailRefresh'].toString())
           : null,
-      productTags:
-          (json['productTags'] as List<dynamic>?)
-              ?.map(
-                (e) => e is Map
-                    ? Map<String, dynamic>.from(e)
-                    : <String, dynamic>{},
-              )
-              .toList() ??
-          [],
-      productSashes:
-          (json['productSashes'] as List<dynamic>?)
-              ?.map(
-                (e) => e is Map
-                    ? Map<String, dynamic>.from(e)
-                    : <String, dynamic>{},
-              )
-              .toList() ??
-          [],
+      productTags: _parseTags(json['ProductTags'] ?? json['productTags']),
+      productSashes: _parseTags(json['ProductSashes'] ?? json['productSashes']),
       availablePackTypes:
           (json['availablePackTypes'] as List<dynamic>?)
-              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
               .toList() ??
           [],
       backorderMessage: (json['backorderMessage'] ?? '').toString(),
@@ -524,8 +525,8 @@ class Product {
       firstSeen: json['firstSeen'] != null
           ? DateTime.tryParse(json['firstSeen'].toString())
           : null,
-      lastPriceRefresh: DateTime.now(),  // search result = fresh price data
-      lastDetailRefresh: null,            // search result = partial, needs detail fetch
+      lastPriceRefresh: DateTime.now(), // search result = fresh price data
+      lastDetailRefresh: null, // search result = partial, needs detail fetch
       backorderMessage: '',
       isDeliveryOnly: false,
       isEdrSpecial: false,
@@ -583,8 +584,10 @@ class Product {
     'previousTitles': previousTitles,
     'priceHistory': priceHistory.map((p) => p.toJson()).toList(),
     if (firstSeen != null) 'firstSeen': firstSeen!.toIso8601String(),
-    if (lastPriceRefresh != null) 'lastPriceRefresh': lastPriceRefresh!.toIso8601String(),
-    if (lastDetailRefresh != null) 'lastDetailRefresh': lastDetailRefresh!.toIso8601String(),
+    if (lastPriceRefresh != null)
+      'lastPriceRefresh': lastPriceRefresh!.toIso8601String(),
+    if (lastDetailRefresh != null)
+      'lastDetailRefresh': lastDetailRefresh!.toIso8601String(),
     'backorderMessage': backorderMessage,
     'isDeliveryOnly': isDeliveryOnly,
     'isEdrSpecial': isEdrSpecial,
@@ -599,7 +602,10 @@ class Product {
     'deliveryOptionsInfo': deliveryOptionsInfo,
   };
 
-  Product copyWith({int? stockOnHand}) {
+  Product copyWith({
+    int? stockOnHand,
+    List<Map<String, dynamic>>? productTags,
+  }) {
     return Product(
       stockcode: stockcode,
       title: title,
@@ -644,6 +650,7 @@ class Product {
       recommendedProducts: recommendedProducts,
       source: source,
       deliveryOptionsInfo: deliveryOptionsInfo,
+      productTags: productTags ?? this.productTags,
     );
   }
 }

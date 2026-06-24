@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/product.dart';
@@ -19,12 +20,13 @@ class ProductCard extends StatelessWidget {
     final price = product.singlePrice;
     final promo = product.promoPrice;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final noStock = product.stockOnHand <= 0;
+    final nearby = noStock && price != null && price.value > 0;
     // All distinct pack types (skip promoprice — shown separately)
     final packPrices = product.prices
-        .where((p) =>
-            p.type != 'promoprice' &&
-            p.value > 0 &&
-            p.packType.isNotEmpty)
+        .where(
+          (p) => p.type != 'promoprice' && p.value > 0 && p.packType.isNotEmpty,
+        )
         .toList();
     // Remove duplicates by packType
     final seen = <String>{};
@@ -33,7 +35,9 @@ class ProductCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
       child: Material(
-        color: Theme.of(context).cardColor,
+        color: noStock
+            ? (isDark ? Colors.white12 : Colors.grey[100])
+            : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           onTap: onTap,
@@ -48,10 +52,20 @@ class ProductCard extends StatelessWidget {
                     width: 56,
                     height: 72,
                     color: Colors.white,
-                    child: Image.network(
-                      product.cdnImageUrl,
+                    child: CachedNetworkImage(
+                      imageUrl: product.cdnImageUrl,
                       fit: BoxFit.contain,
-                      errorBuilder: (_, _, _) => Container(
+                      memCacheWidth: 112,
+                      memCacheHeight: 144,
+                      placeholder: (_, __) => Container(
+                        color: Colors.white,
+                        child: const Icon(
+                          Icons.wine_bar,
+                          size: 24,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      errorWidget: (_, _, _) => Container(
                         color: Colors.white,
                         child: const Icon(
                           Icons.wine_bar,
@@ -85,14 +99,31 @@ class ProductCard extends StatelessWidget {
                           fontSize: 12,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        product.stockcode,
-                        style: TextStyle(
-                          color: isDark ? Colors.white54 : Colors.grey[400],
-                          fontSize: 11,
-                          fontFamily: 'monospace',
-                        ),
+                      const SizedBox(height: 1),
+                      Row(
+                        children: [
+                          _stockWidget(product.stockOnHand, isDark),
+                          if (nearby)
+                            Container(
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                'nearby',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  color: Colors.orange[700],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
@@ -102,81 +133,83 @@ class ProductCard extends StatelessWidget {
                   children: [
                     // Show all pack types
                     if (uniquePacks.isNotEmpty)
-                      ...uniquePacks.map((pp) => Padding(
-                            padding: const EdgeInsets.only(bottom: 2),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                // Promo strikethrough
-                                if (promo != null &&
-                                    promo.packType == pp.packType &&
-                                    promo.beforePromotion >
-                                        promo.afterPromotion)
-                                  Text(
-                                    '\$${promo.beforePromotion.toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                      decoration: TextDecoration.lineThrough,
+                      ...uniquePacks.map(
+                        (pp) => Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              // Promo strikethrough
+                              if (promo != null &&
+                                  promo.packType == pp.packType &&
+                                  promo.beforePromotion > promo.afterPromotion)
+                                Text(
+                                  '\$${promo.beforePromotion.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    decoration: TextDecoration.lineThrough,
+                                    color: isDark
+                                        ? Colors.grey[500]
+                                        : Colors.grey[400],
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Pack type label
+                                  Container(
+                                    margin: const EdgeInsets.only(right: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 3,
+                                      vertical: 1,
+                                    ),
+                                    decoration: BoxDecoration(
                                       color: isDark
-                                          ? Colors.grey[500]
-                                          : Colors.grey[400],
-                                      fontSize: 11,
+                                          ? Colors.white12
+                                          : Colors.grey[200],
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                    child: Text(
+                                      pp.packType == 'Bottle'
+                                          ? 'ea'
+                                          : pp.packType == 'Case'
+                                          ? 'case'
+                                          : pp.packType
+                                                .toLowerCase()
+                                                .startsWith('case')
+                                          ? 'case'
+                                          : pp.packType.toLowerCase(),
+                                      style: TextStyle(
+                                        fontSize: 8,
+                                        color: isDark
+                                            ? Colors.white54
+                                            : Colors.grey[600],
+                                      ),
                                     ),
                                   ),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Pack type label
-                                    Container(
-                                      margin:
-                                          const EdgeInsets.only(right: 4),
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 3, vertical: 1),
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? Colors.white12
-                                            : Colors.grey[200],
-                                        borderRadius:
-                                            BorderRadius.circular(3),
-                                      ),
-                                      child: Text(
-                                        pp.packType == 'Bottle'
-                                            ? 'ea'
-                                            : pp.packType == 'Case'
-                                                ? 'case'
-                                                : pp.packType
-                                                          .toLowerCase()
-                                                          .startsWith('case')
-                                                    ? 'case'
-                                                    : pp.packType
-                                                        .toLowerCase(),
-                                        style: TextStyle(
-                                          fontSize: 8,
-                                          color: isDark
-                                              ? Colors.white54
-                                              : Colors.grey[600],
-                                        ),
-                                      ),
-                                    ),
-                                    // Price
-                                    Text(
-                                      '\$${pp.value.toStringAsFixed(2)}',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: pp == price ? 17 : 12,
-                                        color: promo != null &&
-                                                promo.packType ==
-                                                    pp.packType
-                                            ? (isDark
+                                  // Price
+                                  Text(
+                                    pp.value > 0
+                                        ? '\$${pp.value.toStringAsFixed(2)}'
+                                        : 'N/A',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: pp == price ? 17 : 12,
+                                      color:
+                                          promo != null &&
+                                              promo.packType == pp.packType
+                                          ? (isDark
                                                 ? AppColors.memberOffer
                                                 : AppColors.memberOfferDark)
-                                            : null,
-                                      ),
+                                          : null,
                                     ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          )),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     // Team discount (on single price)
                     if (showTeamPrice)
                       _buildTeamPrice(price?.value ?? 0, isDark),
@@ -219,6 +252,27 @@ class ProductCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _stockWidget(int stock, bool isDark) {
+    if (stock > 0) {
+      return Text(
+        '$stock in stock',
+        style: TextStyle(
+          color: isDark ? Colors.green[300] : Colors.green[700],
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+        ),
+      );
+    } else {
+      return Text(
+        'out of stock',
+        style: TextStyle(
+          color: isDark ? Colors.grey[400] : Colors.grey[500],
+          fontSize: 11,
+        ),
+      );
+    }
   }
 
   Widget _buildTeamPrice(double regularPrice, bool isDark) {

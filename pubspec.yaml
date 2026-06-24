@@ -39,6 +39,8 @@ dependencies:
   url_launcher: ^6.2.5
   mobile_scanner: ^5.2.3
   fl_chart: ^0.68.0
+  dart_lz4: ^1.2.0
+  cached_network_image: ^3.4.1
 
 dev_dependencies:
   flutter_test:
@@ -73,11 +75,12 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/dans-mobile-header-logo.svg
-    - assets/dans-header-banner-1.svg
+    - assets/MY-dans-mobile-header-logo.svg
+    - assets/MY-dans-header-banner.svg
     - assets/original-dans-head-logo.svg
     - assets/barcode_scanner.svg
-    - assets/mydans.db
+    - assets/barcode-icon.svg
+    - assets/mydans.db.lz4
     - assets/init_db.json
 
   # An image asset can refer to one or more resolution-specific "variants", see

@@ -216,7 +216,9 @@ class PastScansSheet extends StatelessWidget {
       builder: (ctx, scrollCtrl) {
         return Container(
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.95),
+            color: Theme.of(
+              context,
+            ).colorScheme.surface.withValues(alpha: 0.95),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             border: const Border(top: BorderSide(color: Colors.white24)),
           ),

@@ -1,10 +1,12 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../main.dart';
 import '../models/product.dart';
+import '../services/database_service.dart';
 import '../services/search_service.dart';
 import '../services/api_service.dart';
 import '../services/cache_service.dart';
@@ -25,18 +27,29 @@ class _ProductScreenState extends State<ProductScreen> {
   int _imgIdx = 0;
   List<String> _imgs = [];
   String _storeNo = '';
+  late final PageController _pageCtrl = PageController();
 
   @override
   void initState() {
     super.initState();
+    _pageCtrl.addListener(() {
+      final idx = _pageCtrl.page?.round() ?? 0;
+      if (idx != _imgIdx) setState(() => _imgIdx = idx);
+    });
     _load();
+  }
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
     _storeNo = await CacheService.getStoreNo();
     try {
       final cached = SearchService.database[widget.stockcode];
-      final p = await SearchService.hydrate(
+      var p = await SearchService.hydrate(
         cached ??
             Product(
               stockcode: widget.stockcode,
@@ -62,9 +75,28 @@ class _ProductScreenState extends State<ProductScreen> {
         storeNo: _storeNo,
       );
       if (!mounted) return;
+      // Always load tags from DB (API doesn't return product tags reliably)
+      if (p.productTags.isEmpty) {
+        final dbProduct = await DatabaseService.instance.getProduct(
+          widget.stockcode,
+        );
+        if (dbProduct != null && dbProduct.productTags.isNotEmpty) {
+          p = p.copyWith(productTags: dbProduct.productTags);
+        }
+      }
       final urls = <String>[p.cdnImageLargeUrl];
-      for (var i = 2; i <= 8; i++) {
+      final maxImg = p.imageCount > 0 ? p.imageCount : 4;
+      for (var i = 2; i <= maxImg; i++) {
         urls.add(p.cdnImageVariant(i));
+      }
+      // Preload all images
+      for (final url in urls) {
+        precacheImage(NetworkImage(url), context);
+      }
+      // Preload badge images
+      for (final b in p.allBadges) {
+        final url = (b['TagContent'] ?? '').toString();
+        if (url.isNotEmpty) precacheImage(NetworkImage(url), context);
       }
       setState(() {
         _p = p;
@@ -123,94 +155,8 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
-  void _copyPackCode(String code) {
-    Clipboard.setData(ClipboardData(text: code));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$code copied'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  Widget _buildPackVariants(Product p, bool isDark) {
-    // Get unique pack types from prices
-    final variants = <_PackVariant>[];
-    final seen = <String>{};
-    for (final pp in p.prices) {
-      if (pp.value > 0 && pp.packType.isNotEmpty && seen.add(pp.packType)) {
-        final label = pp.packType == 'Bottle' ? 'Each' : pp.packType;
-        final qty = p.packQtyForType(pp.packType);
-        variants.add(_PackVariant(
-          label: label,
-          price: pp.value,
-          stockcode: p.stockcode,
-          packType: pp.packType,
-          qty: qty,
-        ));
-      }
-    }
-
-    if (variants.length <= 1) return const SizedBox.shrink();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Pack sizes',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: isDark ? Colors.white70 : Colors.grey[700]),
-        ),
-        const SizedBox(height: 6),
-        ...variants.map((v) => Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white10 : Colors.grey[100],
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: isDark ? Colors.white24 : Colors.grey[300]!),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('${v.label}${v.qty > 1 ? ' × $v.qty' : ''}',
-                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: isDark ? Colors.white : Colors.black87),
-                      ),
-                      const SizedBox(height: 2),
-                      GestureDetector(
-                        onTap: () => _copyPackCode(v.stockcode),
-                        onLongPress: () => BarcodeGenerator.show(context, v.stockcode),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(v.stockcode,
-                              style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: isDark ? Colors.white54 : Colors.grey[500]),
-                            ),
-                            const SizedBox(width: 4),
-                            const Icon(Icons.copy, size: 12, color: Colors.grey),
-                            const SizedBox(width: 2),
-                            const Icon(Icons.qr_code_2, size: 14, color: Colors.grey),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Text('\$${v.price.toStringAsFixed(2)}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                ),
-              ],
-            ),
-          ),
-        )),
-      ],
-    );
-  }
-
   Future<void> _openGoogle() async {
-    final q = Uri.encodeComponent('${_p!.title} ${_p!.brand} Dan Murphy');
+    final q = Uri.encodeComponent('${_p!.title} ${_p!.brand}');
     await launchUrl(
       Uri.parse('https://www.google.com/search?q=$q'),
       mode: LaunchMode.externalApplication,
@@ -231,6 +177,15 @@ class _ProductScreenState extends State<ProductScreen> {
     final brand = _p!.brand.trim();
     if (brand.isEmpty) return;
     Navigator.pop(context, brand);
+  }
+
+  /// Show per-unit cost when viewing a multipack/case.
+  String? _perUnitCost(Product p) {
+    final price = p.promoPrice ?? p.singlePrice;
+    if (price == null || price.value <= 0) return null;
+    final qty = p.packQtyForType(price.packType);
+    if (qty <= 1) return null;
+    return '\$${(price.value / qty).toStringAsFixed(2)} each';
   }
 
   /// Parse packageSize like "750ml" → mL, compute price per liter.
@@ -298,120 +253,104 @@ class _ProductScreenState extends State<ProductScreen> {
     final price = p.singlePrice;
     final cardBg = isDark ? Theme.of(context).cardColor : Colors.white;
     final perLitre = _pricePerLitre();
-
-    // All distinct pack types with prices
-    final packVariants = <ProductPrice>[];
-    final seenPacks = <String>{};
-    for (final pp in p.prices) {
-      if (pp.value > 0 && pp.packType.isNotEmpty && seenPacks.add(pp.packType)) {
-        packVariants.add(pp);
-      }
-    }
-    // Selected pack type (default: single/bottle)
-    final selectedPack = packVariants.firstWhere(
-      (pp) => pp.type == 'singleprice' || pp.packType == 'Bottle',
-      orElse: () => packVariants.isNotEmpty ? packVariants.first : (price ?? ProductPrice(value: 0, packType: '', type: 'singleprice')),
-    );
+    final perUnit = _perUnitCost(p);
 
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_imgs.isNotEmpty)
-            GestureDetector(
-              onTap: _openFullImage,
-              onHorizontalDragEnd: (d) {
-                if (d.primaryVelocity! < -50 && _imgIdx < _imgs.length - 1) {
-                  setState(() => _imgIdx++);
-                } else if (d.primaryVelocity! > 50 && _imgIdx > 0)
-                  setState(() => _imgIdx--);
-              },
-              child: Container(
-                width: double.infinity,
-                color: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 20),
-                child: Column(
-                  children: [
-                    Image.network(
-                      _imgs[_imgIdx],
-                      height: 200,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, _, _) => SizedBox(
-                        height: 200,
-                        child: const Center(
-                          child: Icon(
-                            Icons.wine_bar,
-                            size: 48,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (_imgs.length > 1)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: List.generate(
-                            _imgs.length,
-                            (i) => Container(
-                              width: 6,
-                              height: 6,
-                              margin: const EdgeInsets.symmetric(horizontal: 3),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: _imgIdx == i
-                                    ? AppColors.primary
-                                    : Colors.grey[300],
+            Stack(
+              children: [
+                GestureDetector(
+                  onTap: _openFullImage,
+                  child: Container(
+                    width: double.infinity,
+                    color: Colors.white,
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: 220,
+                          child: PageView.builder(
+                            controller: _pageCtrl,
+                            itemCount: _imgs.length,
+                            itemBuilder: (_, i) => CachedNetworkImage(
+                              imageUrl: _imgs[i],
+                              fit: BoxFit.contain,
+                              memCacheWidth: 800,
+                              placeholder: (_, __) => const Center(
+                                child: Icon(
+                                  Icons.wine_bar,
+                                  size: 48,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              errorWidget: (_, _, _) => const Center(
+                                child: Icon(
+                                  Icons.wine_bar,
+                                  size: 48,
+                                  color: Colors.grey,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Badge images (from API tags + derived)
-          if (_p != null && _p!.allBadges.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: _p!.allBadges
-                    .where(
-                      (b) =>
-                          b['TagType'] == 'Image' || b['TagType'] == 'Derived',
-                    )
-                    .map(
-                      (b) => Image.network(
-                        (b['TagContent'] ?? '').toString(),
-                        height: 48,
-                        width: 48,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, _, _) => Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: AppColors.highlight),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            (b['FallbackText'] ?? '').toString(),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: AppColors.highlight,
+                        if (_imgs.length > 1)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10, bottom: 20),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: List.generate(
+                                _imgs.length,
+                                (i) => Container(
+                                  width: 6,
+                                  height: 6,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: _imgIdx == i
+                                        ? AppColors.primary
+                                        : Colors.grey[300],
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (_p != null && _p!.allBadges.isNotEmpty)
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    child: Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      direction: Axis.vertical,
+                      children: _p!.allBadges
+                          .where(
+                            (b) =>
+                                b['TagType'] == 'Image' ||
+                                b['TagType'] == 'Derived',
+                          )
+                          .map(
+                            (b) => CachedNetworkImage(
+                              imageUrl: (b['TagContent'] ?? '').toString(),
+                              height: 44,
+                              width: 44,
+                              fit: BoxFit.contain,
+                              placeholder: (_, __) =>
+                                  const SizedBox(width: 44, height: 44),
+                              errorWidget: (_, _, _) => const SizedBox.shrink(),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+              ],
             ),
 
           // Member Offer sash
@@ -450,30 +389,60 @@ class _ProductScreenState extends State<ProductScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Title - tap to copy
-                GestureDetector(
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: p.title));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Title copied'),
-                        duration: Duration(seconds: 1),
+                // Title with action buttons inline
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: p.title));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Title copied'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                        child: Text(
+                          p.title,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            height: 1.2,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    );
-                  },
-                  child: Text(
-                    p.title,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      height: 1.2,
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    _ActionChip(
+                      child: const Icon(Icons.search, size: 18),
+                      onTap: _openGoogle,
+                    ),
+                    const SizedBox(width: 6),
+                    _ActionChip(
+                      child: SvgPicture.network(
+                        'https://www.danmurphys.com.au/assets/images/brands/dans-mobile-header-logo.svg',
+                        height: 16,
+                        colorFilter: ColorFilter.mode(
+                          Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white
+                              : Colors.black87,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                      onTap: _openDans,
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 6),
                 // Code
                 GestureDetector(
                   onTap: _copyCode,
+                  onLongPress: () =>
+                      BarcodeGenerator.show(context, p.stockcode),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -487,6 +456,15 @@ class _ProductScreenState extends State<ProductScreen> {
                       ),
                       const SizedBox(width: 6),
                       const Icon(Icons.copy, size: 16, color: Colors.grey),
+                      const SizedBox(width: 4),
+                      SvgPicture.asset(
+                        'assets/barcode-icon.svg',
+                        height: 16,
+                        colorFilter: const ColorFilter.mode(
+                          Colors.grey,
+                          BlendMode.srcIn,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -506,33 +484,7 @@ class _ProductScreenState extends State<ProductScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
-
-                // Pack variants with barcodes
-                _buildPackVariants(p, isDark),
-
-                const SizedBox(height: 12),
-                // Icon buttons
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    IconButton(
-                      onPressed: _openGoogle,
-                      tooltip: 'Google search',
-                      icon: const Icon(Icons.search, size: 24),
-                    ),
-                    const SizedBox(width: 16),
-                    IconButton(
-                      onPressed: _openDans,
-                      tooltip: 'Open on Dan Murphy\'s website',
-                      icon: SvgPicture.asset(
-                        'assets/original-dans-head-logo.svg',
-                        height: 22,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 6),
 
                 // Price card
                 Container(
@@ -624,6 +576,19 @@ class _ProductScreenState extends State<ProductScreen> {
                                 ),
                               ),
                             ),
+                            if (perUnit != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                  perUnit,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark
+                                        ? Colors.white54
+                                        : Colors.grey[500],
+                                  ),
+                                ),
+                              ),
                           ] else ...[
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.end,
@@ -661,6 +626,19 @@ class _ProductScreenState extends State<ProductScreen> {
                                     color: isDark
                                         ? Colors.white70
                                         : Colors.grey[600],
+                                  ),
+                                ),
+                              ),
+                            if (perUnit != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  perUnit,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark
+                                        ? Colors.white54
+                                        : Colors.grey[500],
                                   ),
                                 ),
                               ),
@@ -941,17 +919,17 @@ class _ProductScreenState extends State<ProductScreen> {
   }
 
   Widget _regionRow(Product p, bool isDark) {
-    final region = '${p.region}, ${p.state}';
-    final country = p.country;
-    if (region.trim().isEmpty && country.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    final region = p.region.trim();
+    final country = p.country.trim();
+    if (region.isEmpty && country.isEmpty) return const SizedBox.shrink();
 
     final flag = _countryFlag(country);
-    final display = [
-      if (flag.isNotEmpty) flag,
-      region,
-    ].where((s) => s.isNotEmpty).join(' ');
+    // Build smart label: region if available, else just country
+    final label = region.isNotEmpty ? '$region, $country' : country;
+    final display = [if (flag.isNotEmpty) flag, label].join(' ');
+
+    // Maps place: region+country if region exists, else just country
+    final mapsPlace = region.isNotEmpty ? '$region, $country' : country;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -966,8 +944,8 @@ class _ProductScreenState extends State<ProductScreen> {
             ),
           ),
           GestureDetector(
-            onTap: () => _openMaps(region, country),
-            onLongPress: () => _searchRegion(region, country),
+            onTap: () => _openMaps(mapsPlace),
+            onLongPress: () => _searchRegion(label),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -988,18 +966,38 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
-  Future<void> _openMaps(String region, String country) async {
-    final q = Uri.encodeComponent('$region $country wineries');
+  Future<void> _openMaps(String place) async {
+    final q = Uri.encodeComponent(place);
     await launchUrl(
-      Uri.parse('https://www.google.com/maps/search/$q'),
+      Uri.parse('https://www.google.com/maps/place/$q/'),
       mode: LaunchMode.externalApplication,
     );
   }
 
-  void _searchRegion(String region, String country) {
-    final query = [region, country].where((s) => s.isNotEmpty).join(' ');
+  void _searchRegion(String query) {
     if (query.trim().isEmpty) return;
     Navigator.pop(context, query);
+  }
+}
+
+// ── Action Chip (styled button) ──
+class _ActionChip extends StatelessWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  const _ActionChip({required this.child, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      color: isDark ? Colors.white12 : Colors.black12,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: SizedBox(width: 36, height: 36, child: Center(child: child)),
+      ),
+    );
   }
 }
 
@@ -1409,39 +1407,50 @@ class _FullImageViewer extends StatefulWidget {
 }
 
 class _FullImageViewerState extends State<_FullImageViewer> {
+  late final PageController _ctrl;
   late int _index;
+
   @override
   void initState() {
     super.initState();
     _index = widget.initialIndex;
+    _ctrl = PageController(initialPage: _index);
+    _ctrl.addListener(() {
+      final i = _ctrl.page?.round() ?? 0;
+      if (i != _index) setState(() => _index = i);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black87,
         title: Text('${_index + 1}/${widget.images.length}'),
       ),
-      body: GestureDetector(
-        onTap: () => Navigator.pop(context),
-        onHorizontalDragEnd: (d) {
-          if (d.primaryVelocity! < -100 && _index < widget.images.length - 1) {
-            setState(() => _index++);
-          } else if (d.primaryVelocity! > 100 && _index > 0)
-            setState(() => _index--);
-        },
-        child: InteractiveViewer(
+      body: PageView.builder(
+        controller: _ctrl,
+        itemCount: widget.images.length,
+        itemBuilder: (_, i) => InteractiveViewer(
           minScale: 0.5,
-          maxScale: 4.0,
-          child: Center(
-            child: Image.network(
-              widget.images[_index],
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) =>
-                  const Icon(Icons.wine_bar, size: 64, color: Colors.grey),
+          maxScale: 5.0,
+          child: GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Center(
+              child: Image.network(
+                widget.images[i],
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.wine_bar, size: 64, color: Colors.grey),
+              ),
             ),
           ),
         ),
@@ -1450,17 +1459,4 @@ class _FullImageViewerState extends State<_FullImageViewer> {
   }
 }
 
-class _PackVariant {
-  final String label;
-  final double price;
-  final String stockcode;
-  final String packType;
-  final int qty;
-  const _PackVariant({
-    required this.label,
-    required this.price,
-    required this.stockcode,
-    required this.packType,
-    required this.qty,
-  });
-}
+// ── Fullscreen Image Viewer ──

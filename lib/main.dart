@@ -52,7 +52,8 @@ void _detectProxy() async {
   ];
   for (final url in candidates) {
     try {
-      final resp = await http.get(Uri.parse('$url/health'))
+      final resp = await http
+          .get(Uri.parse('$url/health'))
           .timeout(const Duration(seconds: 2));
       if (resp.statusCode == 200) {
         ApiService.proxyBase = url;
@@ -79,25 +80,11 @@ class _MyDansAppState extends State<MyDansApp> {
   void initState() {
     super.initState();
     _loadTheme();
-    _watchCatalog();
   }
 
   Future<void> _loadTheme() async {
     final dark = await CacheService.getDarkMode();
     if (mounted) setState(() => _darkMode = dark);
-  }
-
-  void _watchCatalog() {
-    // Poll catalog size periodically
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 2));
-      if (!mounted) return false;
-      final count = ApiService.catalogSize;
-      if (count != _catalogCount) {
-        setState(() => _catalogCount = count);
-      }
-      return mounted;
-    });
   }
 
   void toggleDarkMode(bool dark) async {
@@ -186,12 +173,10 @@ class _HomeScreenState extends State<HomeScreen> {
           const NavigationDestination(
             icon: Icon(Icons.search),
             selectedIcon: Icon(Icons.search, color: AppColors.highlight),
-            label: 'Search',
           ),
           NavigationDestination(
             icon: _buildSettingsIcon(false),
             selectedIcon: _buildSettingsIcon(true),
-            label: 'Settings',
           ),
         ],
       ),

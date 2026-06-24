@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/filters.dart';
+import '../widgets/tag_colors.dart';
 
 class FilterSheet extends StatefulWidget {
   final ProductFilters filters;
@@ -923,6 +924,14 @@ class _FilterSheetState extends State<FilterSheet> {
             contentPadding: EdgeInsets.zero,
             visualDensity: VisualDensity.compact,
           ),
+          SwitchListTile(
+            title: const Text('Hide discontinued'),
+            subtitle: const Text('Products with no price'),
+            value: _f.hideUnavailable,
+            onChanged: (v) => setState(() => _f.hideUnavailable = v),
+            contentPadding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+          ),
           SizedBox(height: MediaQuery.of(context).padding.bottom + 80),
         ],
       ),
@@ -932,32 +941,37 @@ class _FilterSheetState extends State<FilterSheet> {
   Widget _h() => const SizedBox(height: 16);
 
   List<Widget> _buildTagChips() {
-    const tags = {
-      'New': 'New',
-      'Vegan': 'vegan',
-      'Organic': 'organic',
-      'Limited Release': 'limited_release',
-      'Zero Alcohol': 'zero_',
-    };
-    return tags.entries.map((e) {
-      final sel = _f.tags.contains(e.key);
+    const tags = [
+      'Gluten_Free',
+      'Vegan',
+      'Organic',
+      'Limited_Release',
+      'Zero_',
+      'New',
+    ];
+    return tags.map((tag) {
+      final sel = _f.tags.contains(tag);
+      final color = TagColors.forTag(tag) ?? AppColors.primary;
       return FilterChip(
-        selected: false,
+        selected: sel,
         showCheckmark: false,
-        avatar: sel ? const Icon(Icons.check, size: 14) : null,
-        label: Text(e.key, style: const TextStyle(fontSize: 13)),
-        backgroundColor: sel
-            ? Theme.of(context).colorScheme.primary.withAlpha(30)
-            : null,
-        side: sel
-            ? BorderSide(color: Theme.of(context).colorScheme.primary)
-            : null,
+        avatar: sel ? Icon(Icons.check, size: 14, color: color) : null,
+        label: Text(
+          TagColors.label(tag),
+          style: TextStyle(
+            fontSize: 13,
+            color: sel ? color : null,
+            fontWeight: sel ? FontWeight.w600 : null,
+          ),
+        ),
+        backgroundColor: sel ? color.withAlpha(25) : null,
+        side: sel ? BorderSide(color: color) : null,
         onSelected: (_) {
           setState(() {
             if (sel) {
-              _f.tags.remove(e.key);
+              _f.tags.remove(tag);
             } else {
-              _f.tags.add(e.key);
+              _f.tags.add(tag);
             }
           });
         },
@@ -1028,7 +1042,9 @@ class _FilterSheetState extends State<FilterSheet> {
             ),
             selected: false,
             showCheckmark: false,
-            backgroundColor: sel ? AppColors.highlight.withValues(alpha: 0.2) : null,
+            backgroundColor: sel
+                ? AppColors.highlight.withValues(alpha: 0.2)
+                : null,
             side: sel ? const BorderSide(color: AppColors.highlight) : null,
             onSelected: (_) {
               setState(() {
@@ -1101,7 +1117,9 @@ class _FilterSheetState extends State<FilterSheet> {
           ),
           selected: false,
           showCheckmark: false,
-          backgroundColor: sel ? Colors.cyanAccent.withValues(alpha: 0.2) : null,
+          backgroundColor: sel
+              ? Colors.cyanAccent.withValues(alpha: 0.2)
+              : null,
           side: sel ? const BorderSide(color: Colors.cyanAccent) : null,
           onSelected: (_) => setState(() {
             if (sel) {

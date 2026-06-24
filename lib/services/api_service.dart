@@ -249,27 +249,29 @@ class ApiService {
       http.Response response;
       if (proxyBase != null) {
         // Route through PC proxy (VPN interface)
-        final proxyUrl = Uri.parse('$proxyBase/search').replace(
-          queryParameters: {'q': query},
-        );
-        response = await http.get(proxyUrl).timeout(
-          const Duration(seconds: 15),
-        );
+        final proxyUrl = Uri.parse(
+          '$proxyBase/search',
+        ).replace(queryParameters: {'q': query});
+        response = await http
+            .get(proxyUrl)
+            .timeout(const Duration(seconds: 15));
         print('[PROXY] Search "$query" → ${response.statusCode}');
       } else {
-        response = await http.post(
-          Uri.parse('$_webBase/Search/products'),
-          headers: {..._headers, 'Content-Type': 'application/json'},
-          body: json.encode({
-            'Filters': '',
-            'SearchTerm': query,
-            'PageSize': '20',
-            'PageNumber': '1',
-            'SortType': 'Relevance',
-            'Location': '',
-            'PageUrl': '/search?searchTerm=${Uri.encodeComponent(query)}',
-          }),
-        ).timeout(const Duration(seconds: 8));
+        response = await http
+            .post(
+              Uri.parse('$_webBase/Search/products'),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: json.encode({
+                'Filters': '',
+                'SearchTerm': query,
+                'PageSize': '20',
+                'PageNumber': '1',
+                'SortType': 'Relevance',
+                'Location': '',
+                'PageUrl': '/search?searchTerm=${Uri.encodeComponent(query)}',
+              }),
+            )
+            .timeout(const Duration(seconds: 8));
       }
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -355,14 +357,19 @@ class ApiService {
 
   /// Get cardinal direction from origin to target (lat/lng in degrees)
   static String cardinalDirection(
-    double fromLat, double fromLng,
-    double toLat, double toLng,
+    double fromLat,
+    double fromLng,
+    double toLat,
+    double toLng,
   ) {
     final dLat = (toLat - fromLat) * math.pi / 180;
     final dLng = (toLng - fromLng) * math.pi / 180;
     final y = math.sin(dLng) * math.cos(toLat * math.pi / 180);
-    final x = math.cos(fromLat * math.pi / 180) * math.sin(toLat * math.pi / 180) -
-        math.sin(fromLat * math.pi / 180) * math.cos(toLat * math.pi / 180) * math.cos(dLng);
+    final x =
+        math.cos(fromLat * math.pi / 180) * math.sin(toLat * math.pi / 180) -
+        math.sin(fromLat * math.pi / 180) *
+            math.cos(toLat * math.pi / 180) *
+            math.cos(dLng);
     final deg = (math.atan2(y, x) * 180 / math.pi + 360) % 360;
     const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
     final ix = ((deg + 22.5) / 45).round() % 8;

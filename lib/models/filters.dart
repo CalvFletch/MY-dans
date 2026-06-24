@@ -18,6 +18,7 @@ class ProductFilters {
   bool categoryAnd = false; // true=AND, false=OR
   bool countryAnd = false; // true=AND, false=OR
   bool newOnly = false;
+  bool hideUnavailable = false;
 
   bool get isActive =>
       minPrice != null ||
@@ -32,9 +33,11 @@ class ProductFilters {
       regions.isNotEmpty ||
       categories.isNotEmpty ||
       tags.isNotEmpty ||
+      tags.isNotEmpty ||
       inStockOnly ||
       hideOnline ||
-      newOnly;
+      newOnly ||
+      hideUnavailable;
 
   void clear() {
     minPrice = maxPrice = null;

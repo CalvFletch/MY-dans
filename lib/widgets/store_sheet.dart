@@ -28,8 +28,6 @@ class _StoreSheetState extends State<StoreSheet> {
   bool _loading = true;
   String? _error;
   String _sortBy = 'distance'; // 'distance' | 'stock'
-  bool _myStateOnly = true;
-  String? _myState;
 
   @override
   void initState() {
@@ -43,7 +41,7 @@ class _StoreSheetState extends State<StoreSheet> {
       // Use provided postcode or fall back to settings
       final pc = widget.postcode ?? (await CacheService.getPostcode());
       final effectivePc = pc.isNotEmpty ? pc : '2000';
-      
+
       // Fetch stores AND nearby stock in parallel
       final results = await Future.wait([
         ApiService.searchStores(effectivePc),
@@ -62,8 +60,10 @@ class _StoreSheetState extends State<StoreSheet> {
           return stPc == sPc;
         }).toList();
         if (match.isNotEmpty) {
-          s['_stock'] = match.first['AvailableStock'] as int? ?? 
-                        match.first['StockQuantity'] as int? ?? 0;
+          s['_stock'] =
+              match.first['AvailableStock'] as int? ??
+              match.first['StockQuantity'] as int? ??
+              0;
           s['_isAvailable'] = match.first['IsAvailable'] == true;
           s['_packType'] = (match.first['PackType'] ?? '').toString();
         }
@@ -75,14 +75,16 @@ class _StoreSheetState extends State<StoreSheet> {
           final lng = double.tryParse((s['Longitude'] ?? '').toString());
           if (lat != null && lng != null) {
             s['_direction'] = ApiService.cardinalDirection(
-              widget.refLat!, widget.refLng!, lat, lng,
+              widget.refLat!,
+              widget.refLng!,
+              lat,
+              lng,
             );
           } else {
             s['_direction'] = '?';
           }
         }
       }
-      _myState = _stateFromPostcode(effectivePc);
       setState(() {
         _stores = stores;
         _loading = false;
@@ -134,11 +136,6 @@ class _StoreSheetState extends State<StoreSheet> {
 
   List<Map<String, dynamic>> get _filteredSorted {
     var list = _stores.toList();
-
-    // Filter by state
-    if (_myStateOnly && _myState != null) {
-      list = list.where((s) => _stateFromStore(s) == _myState).toList();
-    }
 
     // Sort
     if (_sortBy == 'distance') {
@@ -209,41 +206,34 @@ class _StoreSheetState extends State<StoreSheet> {
                   ],
                 ),
               ),
-              // State filter
-              if (_myState != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: Row(
-                    children: [
-                      Switch(
-                        value: _myStateOnly,
-                        onChanged: (v) => setState(() => _myStateOnly = v),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      Text(
-                        '$_myState only',
-                        style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.grey[700]),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${_filteredSorted.length} stores',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    ],
-                  ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
                 ),
+                child: Text(
+                  '${_filteredSorted.length} stores',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
               const Divider(),
               // List
               Expanded(
                 child: _loading
                     ? const Center(child: CircularProgressIndicator())
                     : _error != null
-                        ? Center(child: Text(_error!, style: const TextStyle(color: Colors.red)))
-                        : ListView.builder(
-                            controller: scrollController,
-                            itemCount: _filteredSorted.length,
-                            itemBuilder: (context, i) => _buildStoreRow(_filteredSorted[i], isDark),
-                          ),
+                    ? Center(
+                        child: Text(
+                          _error!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: scrollController,
+                        itemCount: _filteredSorted.length,
+                        itemBuilder: (context, i) =>
+                            _buildStoreRow(_filteredSorted[i], isDark),
+                      ),
               ),
             ],
           ),
@@ -261,7 +251,9 @@ class _StoreSheetState extends State<StoreSheet> {
         decoration: BoxDecoration(
           color: active ? AppColors.primary : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: active ? AppColors.primary : Colors.grey[400]!),
+          border: Border.all(
+            color: active ? AppColors.primary : Colors.grey[400]!,
+          ),
         ),
         child: Text(
           label,
@@ -285,11 +277,6 @@ class _StoreSheetState extends State<StoreSheet> {
 
     return ListTile(
       dense: true,
-      leading: CircleAvatar(
-        radius: 16,
-        backgroundColor: isDark ? AppColors.primary.withAlpha(80) : AppColors.highlight.withAlpha(60),
-        child: Text(dir, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isDark ? AppColors.highlight : AppColors.primary)),
-      ),
       title: Text(
         name,
         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
@@ -297,15 +284,17 @@ class _StoreSheetState extends State<StoreSheet> {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
-        '${dist != null ? '${dist.toStringAsFixed(1)}km ' : ''}· $postcode $state',
+        '${dist != null ? '${dist.toStringAsFixed(1)}km ' : ''}· $postcode $state${dir != '?' ? '  $dir' : ''}',
         style: TextStyle(fontSize: 12, color: Colors.grey[600]),
       ),
-      trailing: stock != null
-          ? Text(
-              stock > 0 ? '$stock' : '\u2014',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-            )
-          : const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
+      trailing: Text(
+        stock != null && stock > 0 ? '$stock' : '\u2014',
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 14,
+          color: Colors.grey,
+        ),
+      ),
     );
   }
 }
