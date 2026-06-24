@@ -8,6 +8,8 @@ import '../models/product.dart';
 import '../services/search_service.dart';
 import '../services/api_service.dart';
 import '../services/cache_service.dart';
+import '../widgets/store_sheet.dart';
+import '../widgets/barcode_widget.dart';
 
 class ProductScreen extends StatefulWidget {
   final String stockcode;
@@ -53,10 +55,6 @@ class _ProductScreenState extends State<ProductScreen> {
               standardDrinks: '',
               wineBody: '',
               wineSweetness: '',
-              smallImageUrl: '',
-              mediumImageUrl: '',
-              largeImageUrl: '',
-              imageVariants: [],
               prices: [],
               stockOnHand: 0,
               isPurchasable: false,
@@ -64,28 +62,22 @@ class _ProductScreenState extends State<ProductScreen> {
         storeNo: _storeNo,
       );
       if (!mounted) return;
-      if (p != null) {
-        final urls = <String>[p.cdnImageLargeUrl];
-        for (var i = 2; i <= (p.imageVariants.length + 1); i++) {
-          urls.add(p.cdnImageVariant(i));
-        }
-        setState(() {
-          _p = p;
-          _imgs = urls;
-          _loading = false;
-        });
-      } else {
-        setState(() {
-          _error = 'Not found';
-          _loading = false;
-        });
+      final urls = <String>[p.cdnImageLargeUrl];
+      for (var i = 2; i <= 8; i++) {
+        urls.add(p.cdnImageVariant(i));
       }
+      setState(() {
+        _p = p;
+        _imgs = urls;
+        _loading = false;
+      });
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = 'Load failed';
           _loading = false;
         });
+      }
     }
   }
 
@@ -107,13 +99,17 @@ class _ProductScreenState extends State<ProductScreen> {
 
   void _openOtherStores() async {
     final postcode = await CacheService.getPostcode();
+    final storeName = await CacheService.getStoreName();
     if (postcode.isEmpty) return;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) =>
-          _NearbyStoresSheet(stockcode: _p!.stockcode, postcode: postcode),
+      builder: (_) => StoreSheet(
+        stockcode: _p!.stockcode,
+        postcode: postcode,
+        refName: storeName.isNotEmpty ? storeName : null,
+      ),
     );
   }
 
@@ -124,6 +120,92 @@ class _ProductScreenState extends State<ProductScreen> {
         content: Text('Code copied'),
         duration: Duration(seconds: 1),
       ),
+    );
+  }
+
+  void _copyPackCode(String code) {
+    Clipboard.setData(ClipboardData(text: code));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$code copied'),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  Widget _buildPackVariants(Product p, bool isDark) {
+    // Get unique pack types from prices
+    final variants = <_PackVariant>[];
+    final seen = <String>{};
+    for (final pp in p.prices) {
+      if (pp.value > 0 && pp.packType.isNotEmpty && seen.add(pp.packType)) {
+        final label = pp.packType == 'Bottle' ? 'Each' : pp.packType;
+        final qty = p.packQtyForType(pp.packType);
+        variants.add(_PackVariant(
+          label: label,
+          price: pp.value,
+          stockcode: p.stockcode,
+          packType: pp.packType,
+          qty: qty,
+        ));
+      }
+    }
+
+    if (variants.length <= 1) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Pack sizes',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: isDark ? Colors.white70 : Colors.grey[700]),
+        ),
+        const SizedBox(height: 6),
+        ...variants.map((v) => Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white10 : Colors.grey[100],
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: isDark ? Colors.white24 : Colors.grey[300]!),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${v.label}${v.qty > 1 ? ' × $v.qty' : ''}',
+                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: isDark ? Colors.white : Colors.black87),
+                      ),
+                      const SizedBox(height: 2),
+                      GestureDetector(
+                        onTap: () => _copyPackCode(v.stockcode),
+                        onLongPress: () => BarcodeGenerator.show(context, v.stockcode),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(v.stockcode,
+                              style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: isDark ? Colors.white54 : Colors.grey[500]),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.copy, size: 12, color: Colors.grey),
+                            const SizedBox(width: 2),
+                            const Icon(Icons.qr_code_2, size: 14, color: Colors.grey),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text('\$${v.price.toStringAsFixed(2)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ],
+            ),
+          ),
+        )),
+      ],
     );
   }
 
@@ -151,7 +233,8 @@ class _ProductScreenState extends State<ProductScreen> {
     Navigator.pop(context, brand);
   }
 
-  /// Parse packageSize like "750ml" → mL, compute price per liter
+  /// Parse packageSize like "750ml" → mL, compute price per liter.
+  /// Accounts for multipacks: case (24) × 330ml = 7.92L, not 0.33L.
   String? _pricePerLitre() {
     final p = _p!;
     final size = p.packageSize.toLowerCase().replaceAll(
@@ -166,9 +249,29 @@ class _ProductScreenState extends State<ProductScreen> {
       ml = double.tryParse(size.replaceAll('ml', '')) ?? 0;
     }
     if (ml <= 0) return null;
-    final price = p.singlePrice?.value ?? 0;
-    if (price <= 0) return null;
-    final perL = (price / (ml / 1000)).toStringAsFixed(2);
+
+    // Pick the best price: promo > single > first non-zero
+    final promo = p.promoPrice;
+    final single = p.singlePrice;
+    final price = promo ?? single;
+    if (price == null || price.value <= 0) return null;
+
+    // Determine pack quantity: API AvailablePackTypes > message parsing > default
+    int qty = p.packQtyForType(price.packType);
+    if (qty <= 1) {
+      // Fallback to message parsing
+      final qtyMatch = RegExp(r'\((\d+)\)').firstMatch(price.message);
+      if (qtyMatch != null) {
+        qty = int.tryParse(qtyMatch.group(1)!) ?? 1;
+      } else if (price.packType.toLowerCase() == 'case') {
+        qty = 12;
+      }
+      final msg = price.message.toLowerCase();
+      if (msg.contains('any six') || msg.contains('any 6')) qty = 6;
+    }
+
+    final totalMl = ml * qty;
+    final perL = (price.value / (totalMl / 1000)).toStringAsFixed(2);
     return '\$$perL/L';
   }
 
@@ -196,6 +299,20 @@ class _ProductScreenState extends State<ProductScreen> {
     final cardBg = isDark ? Theme.of(context).cardColor : Colors.white;
     final perLitre = _pricePerLitre();
 
+    // All distinct pack types with prices
+    final packVariants = <ProductPrice>[];
+    final seenPacks = <String>{};
+    for (final pp in p.prices) {
+      if (pp.value > 0 && pp.packType.isNotEmpty && seenPacks.add(pp.packType)) {
+        packVariants.add(pp);
+      }
+    }
+    // Selected pack type (default: single/bottle)
+    final selectedPack = packVariants.firstWhere(
+      (pp) => pp.type == 'singleprice' || pp.packType == 'Bottle',
+      orElse: () => packVariants.isNotEmpty ? packVariants.first : price!,
+    );
+
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -204,9 +321,9 @@ class _ProductScreenState extends State<ProductScreen> {
             GestureDetector(
               onTap: _openFullImage,
               onHorizontalDragEnd: (d) {
-                if (d.primaryVelocity! < -50 && _imgIdx < _imgs.length - 1)
+                if (d.primaryVelocity! < -50 && _imgIdx < _imgs.length - 1) {
                   setState(() => _imgIdx++);
-                else if (d.primaryVelocity! > 50 && _imgIdx > 0)
+                } else if (d.primaryVelocity! > 50 && _imgIdx > 0)
                   setState(() => _imgIdx--);
               },
               child: Container(
@@ -219,7 +336,7 @@ class _ProductScreenState extends State<ProductScreen> {
                       _imgs[_imgIdx],
                       height: 200,
                       fit: BoxFit.contain,
-                      errorBuilder: (_, __, _) => Container(
+                      errorBuilder: (_, _, _) => SizedBox(
                         height: 200,
                         child: const Center(
                           child: Icon(
@@ -253,6 +370,78 @@ class _ProductScreenState extends State<ProductScreen> {
                       ),
                   ],
                 ),
+              ),
+            ),
+
+          // Badge images (from API tags + derived)
+          if (_p != null && _p!.allBadges.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: _p!.allBadges
+                    .where(
+                      (b) =>
+                          b['TagType'] == 'Image' || b['TagType'] == 'Derived',
+                    )
+                    .map(
+                      (b) => Image.network(
+                        (b['TagContent'] ?? '').toString(),
+                        height: 48,
+                        width: 48,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) => Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: AppColors.highlight),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            (b['FallbackText'] ?? '').toString(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.highlight,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+
+          // Member Offer sash
+          if (_p != null && _p!.productSashes.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 8,
+                children: _p!.productSashes
+                    .map(
+                      (s) => Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.memberOfferBg,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          (s['TagContent'] ?? '').toString(),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.memberOfferDark,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
               ),
             ),
 
@@ -317,7 +506,12 @@ class _ProductScreenState extends State<ProductScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
+
+                // Pack variants with barcodes
+                _buildPackVariants(p, isDark),
+
+                const SizedBox(height: 12),
                 // Icon buttons
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -737,8 +931,9 @@ class _ProductScreenState extends State<ProductScreen> {
     if (c.contains('chile')) return '🇨🇱';
     if (c.contains('usa') ||
         c.contains('united states') ||
-        c.contains('california'))
+        c.contains('california')) {
       return '🇺🇸';
+    }
     if (c.contains('germany')) return '🇩🇪';
     if (c.contains('portugal')) return '🇵🇹';
     if (c.contains('south africa')) return '🇿🇦';
@@ -748,8 +943,9 @@ class _ProductScreenState extends State<ProductScreen> {
   Widget _regionRow(Product p, bool isDark) {
     final region = '${p.region}, ${p.state}';
     final country = p.country;
-    if (region.trim().isEmpty && country.isEmpty)
+    if (region.trim().isEmpty && country.isEmpty) {
       return const SizedBox.shrink();
+    }
 
     final flag = _countryFlag(country);
     final display = [
@@ -935,8 +1131,9 @@ class _ProductHistoryPage extends StatelessWidget {
                       reservedSize: 30,
                       getTitlesWidget: (v, _) {
                         final i = v.toInt();
-                        if (i < 0 || i >= history.length)
+                        if (i < 0 || i >= history.length) {
                           return const SizedBox.shrink();
+                        }
                         final d = history[i].date;
                         return Padding(
                           padding: const EdgeInsets.only(top: 6),
@@ -969,7 +1166,7 @@ class _ProductHistoryPage extends StatelessWidget {
                     barWidth: 2.5,
                     dotData: FlDotData(
                       show: true,
-                      getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
+                      getDotPainter: (spot, _, _, _) => FlDotCirclePainter(
                         radius: 3,
                         color: AppColors.primary,
                         strokeWidth: 1,
@@ -1117,11 +1314,12 @@ class _NearbyStoresSheetState extends State<_NearbyStoresSheet> {
 
   Future<void> _search() async {
     final stores = await ApiService.searchStores(widget.postcode);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _stores = stores;
         _loading = false;
       });
+    }
   }
 
   @override
@@ -1160,7 +1358,7 @@ class _NearbyStoresSheetState extends State<_NearbyStoresSheet> {
                 : ListView.separated(
                     controller: ScrollController()..addListener(() {}),
                     itemCount: _stores.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (_, i) {
                       final s = _stores[i];
                       return ListTile(
@@ -1230,9 +1428,9 @@ class _FullImageViewerState extends State<_FullImageViewer> {
       body: GestureDetector(
         onTap: () => Navigator.pop(context),
         onHorizontalDragEnd: (d) {
-          if (d.primaryVelocity! < -100 && _index < widget.images.length - 1)
+          if (d.primaryVelocity! < -100 && _index < widget.images.length - 1) {
             setState(() => _index++);
-          else if (d.primaryVelocity! > 100 && _index > 0)
+          } else if (d.primaryVelocity! > 100 && _index > 0)
             setState(() => _index--);
         },
         child: InteractiveViewer(
@@ -1242,7 +1440,7 @@ class _FullImageViewerState extends State<_FullImageViewer> {
             child: Image.network(
               widget.images[_index],
               fit: BoxFit.contain,
-              errorBuilder: (_, __, _) =>
+              errorBuilder: (_, _, _) =>
                   const Icon(Icons.wine_bar, size: 64, color: Colors.grey),
             ),
           ),
@@ -1250,4 +1448,19 @@ class _FullImageViewerState extends State<_FullImageViewer> {
       ),
     );
   }
+}
+
+class _PackVariant {
+  final String label;
+  final double price;
+  final String stockcode;
+  final String packType;
+  final int qty;
+  const _PackVariant({
+    required this.label,
+    required this.price,
+    required this.stockcode,
+    required this.packType,
+    required this.qty,
+  });
 }

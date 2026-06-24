@@ -37,10 +37,6 @@ class Product {
   final String wineSweetness;
   final double? averageRating;
   final int totalReviewCount;
-  final String smallImageUrl;
-  final String mediumImageUrl;
-  final String largeImageUrl;
-  final List<String> imageVariants;
   final List<ProductPrice> prices;
   final int stockOnHand;
   final bool isPurchasable;
@@ -50,10 +46,58 @@ class Product {
   final List<String> previousTitles;
   final List<PriceRecord> priceHistory;
   final DateTime? firstSeen;
+  final DateTime? lastPriceRefresh;   // when prices/stock last fetched live
+  final DateTime? lastDetailRefresh;  // when full detail last fetched
+  final List<Map<String, dynamic>> productTags;
+  final List<Map<String, dynamic>> productSashes;
+  final List<Map<String, dynamic>> availablePackTypes;
+  final String backorderMessage;
+  final bool isDeliveryOnly;
+  final bool isEdrSpecial;
+  final bool isFindMeAvailable;
+  final bool ageRestricted;
+  final String unit;
+  final String packageSizeDisplay;
+  final String parentStockCode;
+  final List<Map<String, dynamic>> productsInSameOffer;
+  final List<Map<String, dynamic>> recommendedProducts;
+  final String source;
+  final List<Map<String, dynamic>> deliveryOptionsInfo;
+
+  /// Get pack quantity for a given pack type (e.g., "Case" → 24, "Bottle" → 1)
+  int packQtyForType(String packType) {
+    for (final apt in availablePackTypes) {
+      if ((apt['Key'] ?? '').toString().toLowerCase() ==
+          packType.toLowerCase()) {
+        return apt['UnitQty'] as int? ?? 1;
+      }
+    }
+    return 1; // fallback
+  }
 
   /// True if product was first seen within the last 90 days
   bool get isNew =>
       firstSeen != null && DateTime.now().difference(firstSeen!).inDays <= 90;
+
+  /// Derived badges computed from product attributes (like Zero% Alcohol)
+  List<Map<String, dynamic>> get derivedBadges {
+    final badges = <Map<String, dynamic>>[];
+    final abv = double.tryParse(alcoholVolume.replaceAll('%', '').trim());
+    if (abv != null && abv <= 0.5 && alcoholVolume.isNotEmpty) {
+      badges.add({
+        'TagContent':
+            'https://media.danmurphys.com.au/dmo/e-commerce/badges/DM_Badges_Working_CMYK__Zero-_%20Alcohol.png',
+        'FallbackText': 'Zero%* Alcohol 0-0.5% ABV',
+        'TagType': 'Derived',
+      });
+    }
+    return badges;
+  }
+
+  List<Map<String, dynamic>> get allBadges => [
+    ...productTags,
+    ...derivedBadges,
+  ];
 
   Product({
     required this.stockcode,
@@ -74,10 +118,6 @@ class Product {
     required this.wineSweetness,
     this.averageRating,
     this.totalReviewCount = 0,
-    required this.smallImageUrl,
-    required this.mediumImageUrl,
-    required this.largeImageUrl,
-    required this.imageVariants,
     required this.prices,
     this.stockOnHand = 0,
     this.isPurchasable = true,
@@ -87,6 +127,23 @@ class Product {
     this.previousTitles = const [],
     this.priceHistory = const [],
     this.firstSeen,
+    this.lastPriceRefresh,
+    this.lastDetailRefresh,
+    this.productTags = const [],
+    this.productSashes = const [],
+    this.availablePackTypes = const [],
+    this.backorderMessage = '',
+    this.isDeliveryOnly = false,
+    this.isEdrSpecial = false,
+    this.isFindMeAvailable = false,
+    this.ageRestricted = false,
+    this.unit = '',
+    this.packageSizeDisplay = '',
+    this.parentStockCode = '',
+    this.productsInSameOffer = const [],
+    this.recommendedProducts = const [],
+    this.source = '',
+    this.deliveryOptionsInfo = const [],
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
@@ -154,10 +211,6 @@ class Product {
       wineSweetness: ad('webwinestyle'),
       averageRating: double.tryParse(ad('webaverageproductrating')),
       totalReviewCount: int.tryParse(ad('webtotalreviewcount')) ?? 0,
-      smallImageUrl: (json['SmallImageFile'] ?? '').toString(),
-      mediumImageUrl: (json['MediumImageFile'] ?? '').toString(),
-      largeImageUrl: (json['LargeImageFile'] ?? '').toString(),
-      imageVariants: variants,
       prices: priceList,
       stockOnHand: json['StockOnHand'] ?? 0,
       isPurchasable: json['IsPurchasable'] == true,
@@ -177,6 +230,59 @@ class Product {
       firstSeen: json['firstSeen'] != null
           ? DateTime.tryParse(json['firstSeen'].toString())
           : null,
+      lastPriceRefresh: json['lastPriceRefresh'] != null
+          ? DateTime.tryParse(json['lastPriceRefresh'].toString())
+          : null,
+      lastDetailRefresh: json['lastDetailRefresh'] != null
+          ? DateTime.tryParse(json['lastDetailRefresh'].toString())
+          : null,
+      productTags:
+          (json['productTags'] as List<dynamic>?)
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
+              .toList() ??
+          [],
+      productSashes:
+          (json['productSashes'] as List<dynamic>?)
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
+              .toList() ??
+          [],
+      availablePackTypes:
+          (json['availablePackTypes'] as List<dynamic>?)
+              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              .toList() ??
+          [],
+      backorderMessage: (json['backorderMessage'] ?? '').toString(),
+      isDeliveryOnly: json['isDeliveryOnly'] == true,
+      isEdrSpecial: json['isEdrSpecial'] == true,
+      isFindMeAvailable: json['isFindMeAvailable'] == true,
+      ageRestricted: json['ageRestricted'] == true,
+      unit: (json['unit'] ?? '').toString(),
+      packageSizeDisplay: (json['packageSizeDisplay'] ?? '').toString(),
+      parentStockCode: (json['parentStockCode'] ?? '').toString(),
+      productsInSameOffer:
+          (json['productsInSameOffer'] as List<dynamic>?)
+              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              .toList() ??
+          [],
+      recommendedProducts:
+          (json['recommendedProducts'] as List<dynamic>?)
+              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              .toList() ??
+          [],
+      source: (json['source'] ?? '').toString(),
+      deliveryOptionsInfo:
+          (json['deliveryOptionsInfo'] as List<dynamic>?)
+              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              .toList() ??
+          [],
     );
   }
 
@@ -257,10 +363,6 @@ class Product {
       wineSweetness: (json['wineSweetness'] ?? '').toString(),
       averageRating: (json['averageRating'] as num?)?.toDouble(),
       totalReviewCount: json['totalReviewCount'] ?? 0,
-      smallImageUrl: (json['smallImageUrl'] ?? '').toString(),
-      mediumImageUrl: (json['mediumImageUrl'] ?? '').toString(),
-      largeImageUrl: (json['largeImageUrl'] ?? '').toString(),
-      imageVariants: imageVariants,
       prices: prices,
       stockOnHand: json['stockOnHand'] ?? 0,
       isPurchasable: json['isPurchasable'] != false,
@@ -280,6 +382,47 @@ class Product {
       firstSeen: json['firstSeen'] != null
           ? DateTime.tryParse(json['firstSeen'].toString())
           : null,
+      lastPriceRefresh: json['lastPriceRefresh'] != null
+          ? DateTime.tryParse(json['lastPriceRefresh'].toString())
+          : null,
+      lastDetailRefresh: json['lastDetailRefresh'] != null
+          ? DateTime.tryParse(json['lastDetailRefresh'].toString())
+          : null,
+      productTags:
+          (json['productTags'] as List<dynamic>?)
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
+              .toList() ??
+          [],
+      productSashes:
+          (json['productSashes'] as List<dynamic>?)
+              ?.map(
+                (e) => e is Map
+                    ? Map<String, dynamic>.from(e)
+                    : <String, dynamic>{},
+              )
+              .toList() ??
+          [],
+      availablePackTypes:
+          (json['availablePackTypes'] as List<dynamic>?)
+              ?.map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+              .toList() ??
+          [],
+      backorderMessage: (json['backorderMessage'] ?? '').toString(),
+      isDeliveryOnly: json['isDeliveryOnly'] == true,
+      isEdrSpecial: json['isEdrSpecial'] == true,
+      isFindMeAvailable: json['isFindMeAvailable'] == true,
+      ageRestricted: json['ageRestricted'] == true,
+      unit: (json['unit'] ?? '').toString(),
+      packageSizeDisplay: (json['packageSizeDisplay'] ?? '').toString(),
+      parentStockCode: (json['parentStockCode'] ?? '').toString(),
+      productsInSameOffer: const [],
+      recommendedProducts: const [],
+      source: '',
+      deliveryOptionsInfo: const [],
     );
   }
 
@@ -324,27 +467,38 @@ class Product {
     final inv = first?['Inventory'] as Map<String, dynamic>?;
     final stockOnHand = inv?['availableinventoryqty'] ?? 0;
 
+    // Parse AdditionalDetails — handles both List and Map formats
+    final adRaw = first?['AdditionalDetails'];
+    String ad(String n) {
+      if (adRaw is List) {
+        for (final d in adRaw) {
+          if (d is Map && d['Name'] == n) return (d['Value'] ?? '').toString();
+        }
+      } else if (adRaw is Map) {
+        return (adRaw[n] ?? '').toString();
+      }
+      return '';
+    }
+
     return Product(
       stockcode: stockcode,
       title: name,
-      brand: '',
-      description: '',
-      richDescription: '',
-      packageSize: '',
-      alcoholVolume: '',
-      varietal: '',
-      region: '',
-      state: '',
-      country: '',
-      vintage: '',
-      closure: '',
-      standardDrinks: '',
-      wineBody: '',
-      wineSweetness: '',
-      smallImageUrl: '',
-      mediumImageUrl: '',
-      largeImageUrl: '',
-      imageVariants: [],
+      brand: ad('webbrandname'),
+      description: (first?['Description'] ?? '').toString(),
+      richDescription: (first?['RichDescription'] ?? '').toString(),
+      packageSize: ad('webliquorsize'),
+      alcoholVolume: ad('webalcoholpercentage'),
+      varietal: ad('varietal'),
+      region: ad('webregionoforigin'),
+      state: ad('webstateoforigin'),
+      country: ad('countryoforigin'),
+      vintage: ad('webvintagecurrent'),
+      closure: ad('webbottleclosure'),
+      standardDrinks: ad('standarddrinks'),
+      wineBody: ad('webwinebody'),
+      wineSweetness: ad('webwinestyle'),
+      averageRating: double.tryParse(ad('webaverageproductrating')),
+      totalReviewCount: int.tryParse(ad('webtotalreviewcount')) ?? 0,
       prices: prices,
       stockOnHand: stockOnHand,
       isPurchasable: true,
@@ -364,6 +518,20 @@ class Product {
       firstSeen: json['firstSeen'] != null
           ? DateTime.tryParse(json['firstSeen'].toString())
           : null,
+      lastPriceRefresh: DateTime.now(),  // search result = fresh price data
+      lastDetailRefresh: null,            // search result = partial, needs detail fetch
+      backorderMessage: '',
+      isDeliveryOnly: false,
+      isEdrSpecial: false,
+      isFindMeAvailable: false,
+      ageRestricted: false,
+      unit: '',
+      packageSizeDisplay: '',
+      parentStockCode: '',
+      productsInSameOffer: const [],
+      recommendedProducts: const [],
+      source: '',
+      deliveryOptionsInfo: const [],
     );
   }
 
@@ -387,10 +555,6 @@ class Product {
     'wineSweetness': wineSweetness,
     'averageRating': averageRating,
     'totalReviewCount': totalReviewCount,
-    'smallImageUrl': smallImageUrl,
-    'mediumImageUrl': mediumImageUrl,
-    'largeImageUrl': largeImageUrl,
-    'imageVariants': imageVariants,
     'prices': prices
         .map(
           (p) => {
@@ -413,6 +577,20 @@ class Product {
     'previousTitles': previousTitles,
     'priceHistory': priceHistory.map((p) => p.toJson()).toList(),
     if (firstSeen != null) 'firstSeen': firstSeen!.toIso8601String(),
+    if (lastPriceRefresh != null) 'lastPriceRefresh': lastPriceRefresh!.toIso8601String(),
+    if (lastDetailRefresh != null) 'lastDetailRefresh': lastDetailRefresh!.toIso8601String(),
+    'backorderMessage': backorderMessage,
+    'isDeliveryOnly': isDeliveryOnly,
+    'isEdrSpecial': isEdrSpecial,
+    'isFindMeAvailable': isFindMeAvailable,
+    'ageRestricted': ageRestricted,
+    'unit': unit,
+    'packageSizeDisplay': packageSizeDisplay,
+    'parentStockCode': parentStockCode,
+    'productsInSameOffer': productsInSameOffer,
+    'recommendedProducts': recommendedProducts,
+    'source': source,
+    'deliveryOptionsInfo': deliveryOptionsInfo,
   };
 
   Product copyWith({int? stockOnHand}) {
@@ -435,10 +613,6 @@ class Product {
       wineSweetness: wineSweetness,
       averageRating: averageRating,
       totalReviewCount: totalReviewCount,
-      smallImageUrl: smallImageUrl,
-      mediumImageUrl: mediumImageUrl,
-      largeImageUrl: largeImageUrl,
-      imageVariants: imageVariants,
       prices: prices,
       stockOnHand: stockOnHand ?? this.stockOnHand,
       isPurchasable: isPurchasable,
@@ -448,6 +622,20 @@ class Product {
       previousTitles: previousTitles,
       priceHistory: priceHistory,
       firstSeen: firstSeen,
+      lastPriceRefresh: lastPriceRefresh,
+      lastDetailRefresh: lastDetailRefresh,
+      backorderMessage: backorderMessage,
+      isDeliveryOnly: isDeliveryOnly,
+      isEdrSpecial: isEdrSpecial,
+      isFindMeAvailable: isFindMeAvailable,
+      ageRestricted: ageRestricted,
+      unit: unit,
+      packageSizeDisplay: packageSizeDisplay,
+      parentStockCode: parentStockCode,
+      productsInSameOffer: productsInSameOffer,
+      recommendedProducts: recommendedProducts,
+      source: source,
+      deliveryOptionsInfo: deliveryOptionsInfo,
     );
   }
 }

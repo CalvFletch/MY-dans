@@ -12,6 +12,7 @@ class ProductFilters {
   final Set<String> countries = {};
   final Set<String> regions = {};
   final Set<String> categories = {};
+  final Set<String> tags = {};
   bool inStockOnly = false;
   bool hideOnline = false;
   bool categoryAnd = false; // true=AND, false=OR
@@ -30,6 +31,7 @@ class ProductFilters {
       countries.isNotEmpty ||
       regions.isNotEmpty ||
       categories.isNotEmpty ||
+      tags.isNotEmpty ||
       inStockOnly ||
       hideOnline ||
       newOnly;
@@ -42,6 +44,7 @@ class ProductFilters {
     countries.clear();
     regions.clear();
     categories.clear();
+    tags.clear();
     inStockOnly = false;
     hideOnline = false;
     categoryAnd = false;
@@ -58,20 +61,40 @@ class ProductFilters {
       if (inStockOnly && p.stockOnHand <= 0) return false;
       if (hideOnline && p.stockcode.startsWith('ER_')) return false;
       if (newOnly && !p.isNew) return false;
+      if (tags.isNotEmpty) {
+        final productTagNames = p.allBadges
+            .where((b) => b['FallbackText'] != null)
+            .map((b) => b['FallbackText'].toString().toLowerCase())
+            .toSet();
+        final productTagUrls = p.allBadges
+            .where((b) => b['TagContent'] != null)
+            .map((b) => b['TagContent'].toString().toLowerCase())
+            .toSet();
+        final hasMatch = tags.any(
+          (t) =>
+              productTagNames.contains(t.toLowerCase()) ||
+              productTagUrls.any((u) => u.contains(t.toLowerCase())),
+        );
+        if (!hasMatch) return false;
+      }
 
       final vintage = int.tryParse(p.vintage);
-      if (minVintage != null && (vintage == null || vintage < minVintage!))
+      if (minVintage != null && (vintage == null || vintage < minVintage!)) {
         return false;
-      if (maxVintage != null && (vintage == null || vintage > maxVintage!))
+      }
+      if (maxVintage != null && (vintage == null || vintage > maxVintage!)) {
         return false;
+      }
 
       final alcohol = double.tryParse(
         p.alcoholVolume.replaceAll('%', '').trim(),
       );
-      if (minAlcohol != null && (alcohol == null || alcohol < minAlcohol!))
+      if (minAlcohol != null && (alcohol == null || alcohol < minAlcohol!)) {
         return false;
-      if (maxAlcohol != null && (alcohol == null || alcohol > maxAlcohol!))
+      }
+      if (maxAlcohol != null && (alcohol == null || alcohol > maxAlcohol!)) {
         return false;
+      }
 
       if (minPricePerLiter != null || maxPricePerLiter != null) {
         final ppl = _pricePerLiter(p);
@@ -136,8 +159,24 @@ class ProductFilters {
       ml = double.tryParse(size.replaceAll('ml', '')) ?? 0;
     }
     if (ml <= 0) return null;
-    final price = p.singlePrice?.value ?? 0;
-    if (price <= 0) return null;
-    return price / (ml / 1000);
+    final promo = p.promoPrice;
+    final single = p.singlePrice;
+    final price = promo ?? single;
+    if (price == null || price.value <= 0) return null;
+
+    // Pack quantity: API AvailablePackTypes > message parsing > default
+    int qty = p.packQtyForType(price.packType);
+    if (qty <= 1) {
+      final qtyMatch = RegExp(r'\((\d+)\)').firstMatch(price.message);
+      if (qtyMatch != null) {
+        qty = int.tryParse(qtyMatch.group(1)!) ?? 1;
+      } else if (price.packType.toLowerCase() == 'case') {
+        qty = 12;
+      }
+      final msg = price.message.toLowerCase();
+      if (msg.contains('any six') || msg.contains('any 6')) qty = 6;
+    }
+
+    return price.value / ((ml * qty) / 1000);
   }
 }

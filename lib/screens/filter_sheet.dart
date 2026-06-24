@@ -571,7 +571,7 @@ class _FilterSheetState extends State<FilterSheet> {
 
   int? _pi(TextEditingController c, int min, int max) {
     final v = int.tryParse(c.text);
-    return v != null ? v.clamp(min, max) : null;
+    return v?.clamp(min, max);
   }
 
   @override
@@ -606,11 +606,11 @@ class _FilterSheetState extends State<FilterSheet> {
               _f.countryAnd = _f.countryAnd;
               Navigator.pop(context, _f);
             },
-            child: const Text('Apply'),
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.highlight,
               foregroundColor: Colors.black,
             ),
+            child: const Text('Apply'),
           ),
           const SizedBox(width: 8),
         ],
@@ -673,7 +673,7 @@ class _FilterSheetState extends State<FilterSheet> {
                     _f.regions.clear();
                   }),
                   visualDensity: VisualDensity.compact,
-                  backgroundColor: Colors.redAccent.withOpacity(0.08),
+                  backgroundColor: Colors.redAccent.withValues(alpha: 0.08),
                   side: const BorderSide(color: Colors.redAccent),
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                 ),
@@ -760,7 +760,7 @@ class _FilterSheetState extends State<FilterSheet> {
                               )
                               ? Theme.of(
                                   context,
-                                ).colorScheme.primary.withOpacity(0.12)
+                                ).colorScheme.primary.withValues(alpha: 0.12)
                               : null,
                         ),
                       ),
@@ -851,7 +851,7 @@ class _FilterSheetState extends State<FilterSheet> {
                     _f.categories.clear();
                   }),
                   visualDensity: VisualDensity.compact,
-                  backgroundColor: Colors.redAccent.withOpacity(0.08),
+                  backgroundColor: Colors.redAccent.withValues(alpha: 0.08),
                   side: const BorderSide(color: Colors.redAccent),
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                 ),
@@ -896,6 +896,11 @@ class _FilterSheetState extends State<FilterSheet> {
           const SizedBox(height: 8),
           ..._buildNestedCategories(),
           _h(),
+          // Tags / Badges filter
+          _section('Product Tags'),
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 4, children: _buildTagChips()),
+          _h(),
           SwitchListTile(
             title: const Text('In stock only'),
             value: _f.inStockOnly,
@@ -925,6 +930,42 @@ class _FilterSheetState extends State<FilterSheet> {
   }
 
   Widget _h() => const SizedBox(height: 16);
+
+  List<Widget> _buildTagChips() {
+    const tags = {
+      'New': 'New',
+      'Vegan': 'vegan',
+      'Organic': 'organic',
+      'Limited Release': 'limited_release',
+      'Zero Alcohol': 'zero_',
+    };
+    return tags.entries.map((e) {
+      final sel = _f.tags.contains(e.key);
+      return FilterChip(
+        selected: false,
+        showCheckmark: false,
+        avatar: sel ? const Icon(Icons.check, size: 14) : null,
+        label: Text(e.key, style: const TextStyle(fontSize: 13)),
+        backgroundColor: sel
+            ? Theme.of(context).colorScheme.primary.withAlpha(30)
+            : null,
+        side: sel
+            ? BorderSide(color: Theme.of(context).colorScheme.primary)
+            : null,
+        onSelected: (_) {
+          setState(() {
+            if (sel) {
+              _f.tags.remove(e.key);
+            } else {
+              _f.tags.add(e.key);
+            }
+          });
+        },
+        visualDensity: VisualDensity.compact,
+      );
+    }).toList();
+  }
+
   Widget _section(String t) => Padding(
     padding: const EdgeInsets.only(top: 10, bottom: 6),
     child: Text(
@@ -987,7 +1028,7 @@ class _FilterSheetState extends State<FilterSheet> {
             ),
             selected: false,
             showCheckmark: false,
-            backgroundColor: sel ? AppColors.highlight.withOpacity(0.2) : null,
+            backgroundColor: sel ? AppColors.highlight.withValues(alpha: 0.2) : null,
             side: sel ? const BorderSide(color: AppColors.highlight) : null,
             onSelected: (_) {
               setState(() {
@@ -1060,7 +1101,7 @@ class _FilterSheetState extends State<FilterSheet> {
           ),
           selected: false,
           showCheckmark: false,
-          backgroundColor: sel ? Colors.cyanAccent.withOpacity(0.2) : null,
+          backgroundColor: sel ? Colors.cyanAccent.withValues(alpha: 0.2) : null,
           side: sel ? const BorderSide(color: Colors.cyanAccent) : null,
           onSelected: (_) => setState(() {
             if (sel) {
@@ -1100,7 +1141,7 @@ class _FilterSheetState extends State<FilterSheet> {
                       selected: false,
                       showCheckmark: false,
                       backgroundColor: _f.categories.contains(g)
-                          ? AppColors.memberOffer.withOpacity(0.25)
+                          ? AppColors.memberOffer.withValues(alpha: 0.25)
                           : null,
                       side: _f.categories.contains(g)
                           ? const BorderSide(color: AppColors.memberOffer)

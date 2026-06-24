@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
+import 'database_service.dart';
 
 /// Background daily product updater
 /// - Runs on app launch if >24h since last run
@@ -49,11 +50,12 @@ class BackgroundUpdater {
       'Content-Type': 'application/json',
     };
 
-    // Load existing cache
-    final cacheRaw = prefs.getString('product_cache') ?? '{}';
-    final Map<String, dynamic> cache =
-        json.decode(cacheRaw) as Map<String, dynamic>;
-    print('[DAILY] Existing cache: ${cache.length} products');
+    // Use SQLite for existing product tracking
+    final dbService = DatabaseService.instance;
+    if (!dbService.isReady) {
+      print('[DAILY] SQLite not ready, skipping');
+      return;
+    }
 
     // Step 1: Fetch current catalog codes
     final currentCodes = <String>{};
@@ -80,14 +82,15 @@ class BackgroundUpdater {
     }
     print('[DAILY] Catalog: ${currentCodes.length} codes');
 
-    // Step 2: Find new codes + popular codes
-    final newCodes = currentCodes.where((c) => !cache.containsKey(c)).toList();
+    // Step 2: Find new codes + popular codes (via SQLite)
+    final newCodes = <String>[];
     final popularCodes = <String>[];
-    for (final entry in cache.entries) {
-      final p = entry.value as Map<String, dynamic>;
-      final reviews = p['totalReviewCount'] as int? ?? 0;
-      if (reviews >= threshold && currentCodes.contains(entry.key)) {
-        popularCodes.add(entry.key);
+    for (final code in currentCodes) {
+      final existing = await dbService.getProduct(code);
+      if (existing == null) {
+        newCodes.add(code);
+      } else if (existing.totalReviewCount >= threshold) {
+        popularCodes.add(code);
       }
     }
     print('[DAILY] New: ${newCodes.length}, Popular: ${popularCodes.length}');
@@ -123,7 +126,7 @@ class BackgroundUpdater {
             final prices = <Map<String, dynamic>>[];
             for (final entry in priceMap.entries) {
               final pd = entry.value as Map<String, dynamic>?;
-              if (pd != null)
+              if (pd != null) {
                 prices.add({
                   'type': entry.key,
                   'message': '${pd['Message'] ?? ''}',
@@ -134,43 +137,14 @@ class BackgroundUpdater {
                   'beforePromotion': (pd['BeforePromotion'] ?? 0).toDouble(),
                   'afterPromotion': (pd['AfterPromotion'] ?? 0).toDouble(),
                 });
+              }
             }
 
-            final existing = cache[code] as Map<String, dynamic>?;
-            cache[code] = {
-              'stockcode': '${p['Stockcode'] ?? code}',
-              'title': ad('webtitle'),
-              'brand': ad('webbrandname'),
-              'description': '${p['Description'] ?? ''}',
-              'richDescription': '${p['RichDescription'] ?? ''}',
-              'packageSize': ad('webliquorsize'),
-              'alcoholVolume': ad('webalcoholpercentage'),
-              'varietal': ad('varietal'),
-              'region': ad('webregionoforigin'),
-              'state': ad('webstateoforigin'),
-              'country': ad('countryoforigin'),
-              'vintage': ad('webvintagecurrent'),
-              'closure': ad('webbottleclosure'),
-              'standardDrinks': ad('standarddrinks'),
-              'wineBody': ad('webwinebody'),
-              'wineSweetness': ad('webwinestyle'),
-              'averageRating': double.tryParse(ad('webaverageproductrating')),
-              'totalReviewCount': int.tryParse(ad('webtotalreviewcount')) ?? 0,
-              'smallImageUrl': '',
-              'mediumImageUrl': '',
-              'largeImageUrl': '',
-              'stockOnHand': p['StockOnHand'] ?? 0,
-              'isPurchasable': p['IsPurchasable'] == true,
-              'categories':
-                  ((p['Categories'] as List<dynamic>?)
-                      ?.map((c) => '${c['Name'] ?? ''}')
-                      .toList() ??
-                  []),
-              'prices': prices,
-              'firstSeen':
-                  existing?['firstSeen'] ?? DateTime.now().toIso8601String(),
-              'lastUpdated': DateTime.now().toIso8601String(),
-            };
+            final isNew = newCodes.contains(code);
+            final data = isNew
+                ? _extractFull(p, code, ad, priceMap)
+                : _extractPriceOnly(p, code, ad, priceMap);
+            await dbService.upsertProduct(code, data);
             fetched++;
           }
         } else if (r.statusCode == 429) {
@@ -182,9 +156,8 @@ class BackgroundUpdater {
       await Future.delayed(const Duration(milliseconds: 500));
     }
 
-    // Step 4: Save
-    await prefs.setString('product_cache', json.encode(cache));
-    print('[DAILY] Done. Fetched: $fetched, Cache: ${cache.length} products');
+    // Step 4: Done — data saved to SQLite via upsertProduct
+    print('[DAILY] Done. Fetched: $fetched products');
   }
 
   static Future<String> _getStoreNo() async {
@@ -221,5 +194,99 @@ class BackgroundUpdater {
       if (reviews >= threshold) count++;
     }
     return count;
+  }
+
+  /// Extract full product data for NEW products
+  static Map<String, dynamic> _extractFull(
+    Map<String, dynamic> p,
+    String code,
+    String Function(String) ad,
+    Map<String, dynamic> priceMap,
+  ) {
+    final prices = _parsePrices(priceMap);
+    return {
+      'stockcode': '${p['Stockcode'] ?? code}',
+      'title': ad('webtitle'),
+      'brand': ad('webbrandname'),
+      'description': '${p['Description'] ?? ''}',
+      'richDescription': '${p['RichDescription'] ?? ''}',
+      'packageSize': ad('webliquorsize'),
+      'alcoholVolume': ad('webalcoholpercentage'),
+      'varietal': ad('varietal'),
+      'region': ad('webregionoforigin'),
+      'state': ad('webstateoforigin'),
+      'country': ad('countryoforigin'),
+      'vintage': ad('webvintagecurrent'),
+      'closure': ad('webbottleclosure'),
+      'standardDrinks': ad('standarddrinks'),
+      'wineBody': ad('webwinebody'),
+      'wineSweetness': ad('webwinestyle'),
+      'averageRating': double.tryParse(ad('webaverageproductrating')),
+      'totalReviewCount': int.tryParse(ad('webtotalreviewcount')) ?? 0,
+      'smallImageUrl': '${p['SmallImageFile'] ?? ''}',
+      'mediumImageUrl': '${p['MediumImageFile'] ?? ''}',
+      'largeImageUrl': '${p['LargeImageFile'] ?? ''}',
+      'imageVariants': <String>[],
+      'categories':
+          (p['Categories'] as List<dynamic>?)
+              ?.map((c) => '${c['Name'] ?? ''}')
+              .toList() ??
+          [],
+      'productTags': (p['ProductTags'] as List<dynamic>?)?.toList() ?? [],
+      'productSashes': (p['ProductSashes'] as List<dynamic>?)?.toList() ?? [],
+      'prices': prices,
+      'stockOnHand': p['StockOnHand'] ?? 0,
+      'isPurchasable': p['IsPurchasable'] == true,
+      'isOnSpecial': p['IsOnSpecial'] == true,
+      'isMemberSpecial': p['IsMemberSpecial'] == true,
+      'previousTitles': <String>[],
+      'priceHistory': <Map>[],
+      'firstSeen': DateTime.now().toIso8601String(),
+      'lastPriceRefresh': DateTime.now().toIso8601String(),
+      'lastDetailRefresh': DateTime.now().toIso8601String(),
+    };
+  }
+
+  /// Extract only price/stock/review data for EXISTING products
+  static Map<String, dynamic> _extractPriceOnly(
+    Map<String, dynamic> p,
+    String code,
+    String Function(String) ad,
+    Map<String, dynamic> priceMap,
+  ) {
+    final prices = _parsePrices(priceMap);
+    return {
+      'stockcode': '${p['Stockcode'] ?? code}',
+      'prices': prices,
+      'stockOnHand': p['StockOnHand'] ?? 0,
+      'isPurchasable': p['IsPurchasable'] == true,
+      'isOnSpecial': p['IsOnSpecial'] == true,
+      'isMemberSpecial': p['IsMemberSpecial'] == true,
+      'averageRating': double.tryParse(ad('webaverageproductrating')),
+      'totalReviewCount': int.tryParse(ad('webtotalreviewcount')) ?? 0,
+      'productTags': (p['ProductTags'] as List<dynamic>?)?.toList() ?? [],
+      'productSashes': (p['ProductSashes'] as List<dynamic>?)?.toList() ?? [],
+      'lastPriceRefresh': DateTime.now().toIso8601String(),
+    };
+  }
+
+  static List<Map<String, dynamic>> _parsePrices(Map<String, dynamic> priceMap) {
+    final prices = <Map<String, dynamic>>[];
+    for (final entry in priceMap.entries) {
+      final pd = entry.value as Map<String, dynamic>?;
+      if (pd != null) {
+        prices.add({
+          'type': entry.key,
+          'message': '${pd['Message'] ?? ''}',
+          'value': (pd['Value'] ?? 0).toDouble(),
+          'preText': '${pd['PreText'] ?? ''}',
+          'isMemberOffer': pd['IsMemberOffer'] == true,
+          'packType': '${pd['PackType'] ?? ''}',
+          'beforePromotion': (pd['BeforePromotion'] ?? 0).toDouble(),
+          'afterPromotion': (pd['AfterPromotion'] ?? 0).toDouble(),
+        });
+      }
+    }
+    return prices;
   }
 }

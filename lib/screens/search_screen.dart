@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../models/product.dart';
 import '../services/api_service.dart';
+import '../services/cache_service.dart';
+import '../services/database_service.dart';
 import '../widgets/product_card.dart';
 import '../models/filters.dart';
 import 'filter_sheet.dart';
@@ -21,6 +23,7 @@ class _SearchScreenState extends State<SearchScreen> {
   List<Product> _results = [];
   List<Product> _allResults = [];
   bool _loading = false;
+  bool _showTeamPrices = false;
   String? _error;
   Timer? _debounce;
   final _filters = ProductFilters();
@@ -188,8 +191,10 @@ class _SearchScreenState extends State<SearchScreen> {
 
   void _cycleSort(String key) {
     setState(() {
-      final cycle = _sortCycle[key]!;
-      if (_sortMode == 'relevance' || !cycle.contains(_sortMode)) {
+      final cycle = _sortCycle[key];
+      if (cycle == null) {
+        _sortMode = 'relevance';
+      } else if (_sortMode == 'relevance' || !cycle.contains(_sortMode)) {
         _sortMode = cycle.first;
       } else {
         final idx = cycle.indexOf(_sortMode);
@@ -204,7 +209,8 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   bool _isSortActive(String key) {
-    final cycle = _sortCycle[key]!;
+    final cycle = _sortCycle[key];
+    if (cycle == null) return _sortMode == 'relevance';
     return cycle.contains(_sortMode);
   }
 
@@ -369,8 +375,13 @@ class _SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onSearchChanged);
-    // Load cache immediately, refresh in background
     ApiService.initCatalog();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    _showTeamPrices = await CacheService.getTeamDiscount();
+    if (mounted) setState(() {});
   }
 
   void _onSearchChanged() {
@@ -405,7 +416,25 @@ class _SearchScreenState extends State<SearchScreen> {
 
     setState(() => _loading = true);
 
-    ApiService.searchWithApi(searchTerm).then((results) {
+    ApiService.searchWithApi(
+      searchTerm,
+      onUpdated: () async {
+        if (!mounted) return;
+        // Quietly re-query local DB — no _loading toggle, no web re-fetch
+        final updated =
+            DatabaseService.instance.isReady && DatabaseService.instance.count > 0
+                ? await DatabaseService.instance.search(query)
+                : <Product>[];
+        if (!mounted) return;
+        if (updated.isNotEmpty) {
+          setState(() {
+            _allResults = updated;
+            _applyFiltersAndSort();
+            _error = null;
+          });
+        }
+      },
+    ).then((results) {
       if (!mounted) return;
       setState(() {
         _allResults = results;
@@ -482,11 +511,11 @@ class _SearchScreenState extends State<SearchScreen> {
         color: fgColor,
       ),
       backgroundColor: active
-          ? Theme.of(context).colorScheme.primary.withOpacity(0.12)
+          ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.12)
           : null,
       side: active
           ? BorderSide(
-              color: Theme.of(context).colorScheme.primary.withOpacity(0.4),
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
             )
           : null,
     );
@@ -547,6 +576,16 @@ class _SearchScreenState extends State<SearchScreen> {
         }),
       );
     }
+    for (final t in _filters.tags) {
+      pills.add(
+        _pill(t, () {
+          setState(() {
+            _filters.tags.remove(t);
+            _applyFiltersAndSort();
+          });
+        }),
+      );
+    }
     if (_filters.inStockOnly) {
       pills.add(_pill('In Stock', () => _removeFilter('stock')));
     }
@@ -579,10 +618,19 @@ class _SearchScreenState extends State<SearchScreen> {
       MaterialPageRoute(builder: (_) => const BarcodeScannerScreen()),
     );
     if (code != null && mounted) {
-      _controller.text = code;
-      _controller.selection = TextSelection.fromPosition(
-        TextPosition(offset: code.length),
-      );
+      // If it looks like a stockcode (not just digits), go directly to product
+      if (code.contains('_') || code.contains('-') || code.length > 10) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ProductScreen(stockcode: code)),
+        );
+      } else {
+        // Raw barcode — use as search term
+        _controller.text = code;
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: code.length),
+        );
+      }
     }
   }
 
@@ -795,6 +843,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     itemBuilder: (_, i) => ProductCard(
                       product: _results[i],
                       onTap: () => _openProduct(_results[i]),
+                      showTeamPrice: _showTeamPrices,
                     ),
                   ),
           ),

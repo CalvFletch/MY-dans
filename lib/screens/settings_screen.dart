@@ -29,6 +29,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Timer? _debounce;
   int _reviewThreshold = 300;
   DateTime? _lastDailyRun;
+  bool _teamDiscount = false;
 
   @override
   void initState() {
@@ -42,6 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final t = await BackgroundUpdater.getReviewThreshold();
     final last = await BackgroundUpdater.getLastRun();
     final count = await BackgroundUpdater.estimateProductCount(t);
+    _teamDiscount = await CacheService.getTeamDiscount();
     setState(() {
       _reviewThreshold = t;
       _lastDailyRun = last;
@@ -79,18 +81,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (q.isEmpty || q.length < 3) return;
     setState(() => _loading = true);
     final stores = await ApiService.searchStores(q);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _stores = stores;
         _loading = false;
       });
+    }
   }
 
   Future<void> _selectStore(Map<String, dynamic> store) async {
     final id = (store['Id'] ?? '').toString();
     final name = (store['Name'] ?? '').toString();
+    final pc = (store['Postcode'] ?? '').toString();
     await CacheService.setStoreNo(id);
     await CacheService.setStoreName(name);
+    if (pc.isNotEmpty) await CacheService.setPostcode(pc);
     setState(() {
       _storeId = id;
       _storeName = name;
@@ -223,6 +228,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             value: widget.darkMode,
             onChanged: widget.onToggleDarkMode,
+          ),
+          SwitchListTile(
+            title: const Text('Show Team Prices'),
+            subtitle: const Text('30% off eligible Pinnacle products'),
+            secondary: Icon(
+              _teamDiscount ? Icons.discount : Icons.discount_outlined,
+              color: AppColors.spendAndGet,
+            ),
+            value: _teamDiscount,
+            onChanged: (v) async {
+              setState(() => _teamDiscount = v);
+              await CacheService.setTeamDiscount(v);
+            },
           ),
           const SizedBox(height: 28),
           _sectionHeader('Daily Update', Icons.update),

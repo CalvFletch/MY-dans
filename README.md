@@ -1,10 +1,8 @@
-# MY Dan's
-
 ![MY Dan's](assets/git_banner.png)
 
-# A staff tool for Dan Murphys.
+### A staff tool for Dan Murphys.
 
-An Android app for Dan Murphy's floor staff. Search any product in seconds, scan shelf barcodes, and filter inventory with way more precision than the website.
+An Android app for Dan Murphy's floor staff. Search any product in seconds, scan shelf barcodes, and filter inventory with way more precision than the website OR in house dan app.
 
 ## Why?
 

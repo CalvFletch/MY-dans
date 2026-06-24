@@ -5,6 +5,7 @@
 ///
 /// Config: daily_config.json
 ///   { "reviewThreshold": 300, "runTimeHour": 6, "storeNo": "6176" }
+library;
 
 import 'dart:convert';
 import 'dart:io';

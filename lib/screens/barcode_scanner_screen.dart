@@ -1,6 +1,7 @@
 import "package:flutter/material.dart";
 import "package:mobile_scanner/mobile_scanner.dart";
 import "package:shared_preferences/shared_preferences.dart";
+import "../services/database_service.dart";
 
 class BarcodeScannerScreen extends StatefulWidget {
   const BarcodeScannerScreen({super.key});
@@ -78,14 +79,31 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
     _pulseCtrl.reset();
   }
 
-  void _onBarcode(String code) {
+  void _onBarcode(String code) async {
     if (_detectedCode != null) return;
     _saveScan(code);
-    setState(() => _detectedCode = code);
-    _isScanning = false;
+    setState(() {
+      _detectedCode = code;
+      _isScanning = false;
+    });
     _pulseCtrl.stop();
     controller.stop();
-    Navigator.pop(context, code);
+
+    // Try to look up the barcode in our DB
+    String? foundStockcode;
+    try {
+      // Check if barcode matches or is contained in local DB stockcodes
+      if (DatabaseService.instance.isReady) {
+        final results = await DatabaseService.instance.search(code);
+        if (results.isNotEmpty) {
+          foundStockcode = results.first.stockcode;
+        }
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      Navigator.pop(context, foundStockcode ?? code);
+    }
   }
 
   @override
@@ -109,7 +127,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
           children: [
             MobileScanner(
               controller: controller,
-              errorBuilder: (_, error, ___) => Center(
+              errorBuilder: (_, error, _) => Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -198,7 +216,7 @@ class PastScansSheet extends StatelessWidget {
       builder: (ctx, scrollCtrl) {
         return Container(
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface.withOpacity(0.95),
+            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.95),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             border: const Border(top: BorderSide(color: Colors.white24)),
           ),

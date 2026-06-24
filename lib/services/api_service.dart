@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import '../models/product.dart';
 import 'cache_service.dart';
@@ -9,6 +10,10 @@ class ApiService {
   static const _mobileBase = 'https://apiservices.danmurphys.com.au/cmpt';
   static const _key = 'REDACTED3b914654a250e79d62250776';
   static const _ua = 'DanMurphy/10.1.1';
+
+  /// Set to your PC's local IP to proxy API calls through the VPN
+  /// e.g. 'http://192.168.1.209:8080'
+  static String? proxyBase;
 
   static final Map<String, String> _headers = {
     'Ocp-Apim-Subscription-Key': _key,
@@ -233,25 +238,39 @@ class ApiService {
   }
 
   /// Delegate to SearchService (local fuzzy + web fallback with caching)
-  static Future<List<Product>> searchWithApi(String query) =>
-      SearchService.search(query);
+  static Future<List<Product>> searchWithApi(
+    String query, {
+    void Function()? onUpdated,
+  }) => SearchService.search(query, onUpdated: onUpdated);
 
   /// Web search API fallback for text queries
   static Future<List<Product>> webSearch(String query) async {
     try {
-      final response = await http.post(
-        Uri.parse('$_webBase/Search/products'),
-        headers: {..._headers, 'Content-Type': 'application/json'},
-        body: json.encode({
-          'Filters': '',
-          'SearchTerm': query,
-          'PageSize': '20',
-          'PageNumber': '1',
-          'SortType': 'Relevance',
-          'Location': '',
-          'PageUrl': '/search?searchTerm=${Uri.encodeComponent(query)}',
-        }),
-      );
+      http.Response response;
+      if (proxyBase != null) {
+        // Route through PC proxy (VPN interface)
+        final proxyUrl = Uri.parse('$proxyBase/search').replace(
+          queryParameters: {'q': query},
+        );
+        response = await http.get(proxyUrl).timeout(
+          const Duration(seconds: 15),
+        );
+        print('[PROXY] Search "$query" → ${response.statusCode}');
+      } else {
+        response = await http.post(
+          Uri.parse('$_webBase/Search/products'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: json.encode({
+            'Filters': '',
+            'SearchTerm': query,
+            'PageSize': '20',
+            'PageNumber': '1',
+            'SortType': 'Relevance',
+            'Location': '',
+            'PageUrl': '/search?searchTerm=${Uri.encodeComponent(query)}',
+          }),
+        ).timeout(const Duration(seconds: 8));
+      }
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final products = data['Products'] as List<dynamic>? ?? [];
@@ -259,7 +278,9 @@ class ApiService {
             .map((p) => Product.fromSearchJson(p as Map<String, dynamic>))
             .toList();
       }
-    } catch (_) {}
+    } catch (e) {
+      print('[WEBSEARCH] Error: $e');
+    }
     return [];
   }
 
@@ -309,6 +330,43 @@ class ApiService {
       }
     } catch (_) {}
     return [];
+  }
+
+  /// Get nearby store stock for a product
+  static Future<List<Map<String, dynamic>>> getNearbyStock(
+    String stockcode,
+    String postcode,
+  ) async {
+    try {
+      final uri = Uri.parse(
+        '$_webBase/StoreLocator/Stores/NearbyStock?PostCode=$postcode&StockCode=$stockcode',
+      );
+      final response = await http.get(uri, headers: _headers);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return (data['StoreStockDetails'] as List<dynamic>?)
+                ?.map((s) => s as Map<String, dynamic>)
+                .toList() ??
+            [];
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  /// Get cardinal direction from origin to target (lat/lng in degrees)
+  static String cardinalDirection(
+    double fromLat, double fromLng,
+    double toLat, double toLng,
+  ) {
+    final dLat = (toLat - fromLat) * math.pi / 180;
+    final dLng = (toLng - fromLng) * math.pi / 180;
+    final y = math.sin(dLng) * math.cos(toLat * math.pi / 180);
+    final x = math.cos(fromLat * math.pi / 180) * math.sin(toLat * math.pi / 180) -
+        math.sin(fromLat * math.pi / 180) * math.cos(toLat * math.pi / 180) * math.cos(dLng);
+    final deg = (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    final ix = ((deg + 22.5) / 45).round() % 8;
+    return dirs[ix];
   }
 
   /// Get customer reviews

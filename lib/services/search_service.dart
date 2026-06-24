@@ -3,18 +3,30 @@ import 'package:flutter/services.dart';
 import '../models/product.dart';
 import 'cache_service.dart';
 import 'api_service.dart';
+import 'database_service.dart';
 
-/// Own fuzzy search engine over locally cached products.
-/// Learns over time — every search caches new products.
+/// Search engine over SQLite-backed product database.
+/// Falls back to in-memory JSON if SQLite is empty.
 class SearchService {
   static final Map<String, Product> _db = {};
 
   static Map<String, Product> get database => _db;
-  static int get size => _db.length;
+  static int get size => DatabaseService.instance.isReady
+      ? DatabaseService.instance.count
+      : _db.length;
 
-  /// Load cached products on startup, bundled DB first
+  /// Load cached products on startup
   static Future<void> init() async {
-    // 1. Load bundled init database (ships with app)
+    // If SQLite has data, use it (loaded by DatabaseService)
+    if (DatabaseService.instance.isReady &&
+        DatabaseService.instance.count > 0) {
+      print(
+        '[DB] SQLite ready with ${DatabaseService.instance.count} products',
+      );
+      return;
+    }
+
+    // Fallback: load bundled JSON into memory
     try {
       final jsonStr = await rootBundle.loadString('assets/init_db.json');
       final map = json.decode(jsonStr) as Map<String, dynamic>;
@@ -23,12 +35,13 @@ class SearchService {
           entry.value as Map<String, dynamic>,
         );
       }
-      print('[DB] Loaded ${_db.length} products from bundled init DB');
+      print(
+        '[DB] Loaded ${_db.length} products from bundled init DB (fallback)',
+      );
     } catch (_) {
-      print('[DB] No bundled init DB found, starting fresh');
+      print('[DB] No bundled init DB found');
     }
 
-    // 2. Load any additional cached products from SharedPreferences
     final cached = await CacheService.loadProductDb();
     for (final entry in cached.entries) {
       _db.putIfAbsent(entry.key, () => entry.value);
@@ -36,28 +49,49 @@ class SearchService {
     print('[DB] Total local products: ${_db.length}');
   }
 
-  /// Main search: fuzzy local + always fetch web to grow DB
-  static Future<List<Product>> search(String query) async {
+  /// Main search: two-phase — local instant, then web populates DB asynchronously.
+  /// Pass [onUpdated] to get called when web results are cached (UI can re-query).
+  static Future<List<Product>> search(
+    String query, {
+    void Function()? onUpdated,
+  }) async {
     final trimmed = query.trim().toLowerCase();
     if (trimmed.isEmpty) return [];
 
-    // 1. Fuzzy match against local DB (instant)
-    final localResults = _fuzzyMatch(trimmed);
+    final useSqlite =
+        DatabaseService.instance.isReady && DatabaseService.instance.count > 0;
 
-    // 2. Always fetch from web API to grow DB (fire-and-forget-ish, but await first batch)
+    // Phase 1: Local search (instant — no waiting for web)
+    List<Product> localResults;
+    if (useSqlite) {
+      localResults = await DatabaseService.instance.search(query);
+    } else {
+      localResults = _fuzzyMatch(trimmed);
+    }
+
+    // Phase 2: Background web search → cache to SQLite/memory → notify UI
     if (trimmed.length >= 2) {
-      final webResults = await ApiService.webSearch(query);
+      _fetchAndCache(query, trimmed, useSqlite).then((_) => onUpdated?.call());
+    }
+
+    return localResults.take(30).toList();
+  }
+
+  /// Background web fetch + cache (never blocks UI)
+  static Future<void> _fetchAndCache(
+    String query,
+    String trimmed,
+    bool useSqlite,
+  ) async {
+    try {
+      final webResults = await ApiService.webSearch(
+        query,
+      ).timeout(const Duration(seconds: 8));
+      if (webResults.isEmpty) return;
       for (final p in webResults) {
-        _cacheProduct(p);
+        _cacheProduct(p, useSqlite: useSqlite);
       }
-    }
-
-    // 3. Re-search local after caching (now has more products)
-    if (localResults.length < 3) {
-      return _fuzzyMatch(trimmed);
-    }
-
-    return localResults;
+    } catch (_) {}
   }
 
   /// Fuzzy match: n-gram overlap + prefix bonus + exact code match
@@ -130,8 +164,15 @@ class SearchService {
     return result;
   }
 
-  /// Cache a product locally — upsert with history tracking
-  static void _cacheProduct(Product incoming) {
+  /// Cache a product — SQLite if ready, otherwise in-memory
+  static void _cacheProduct(Product incoming, {bool useSqlite = false}) {
+    if (useSqlite && DatabaseService.instance.isReady) {
+      DatabaseService.instance.upsertProduct(
+        incoming.stockcode,
+        incoming.toOfferJson(),
+      );
+      return;
+    }
     final existing = _db[incoming.stockcode];
     if (existing != null) {
       final prevTitles = List<String>.from(existing.previousTitles);
@@ -204,18 +245,6 @@ class SearchService {
         totalReviewCount: incoming.totalReviewCount > 0
             ? incoming.totalReviewCount
             : existing.totalReviewCount,
-        smallImageUrl: incoming.smallImageUrl.isNotEmpty
-            ? incoming.smallImageUrl
-            : existing.smallImageUrl,
-        mediumImageUrl: incoming.mediumImageUrl.isNotEmpty
-            ? incoming.mediumImageUrl
-            : existing.mediumImageUrl,
-        largeImageUrl: incoming.largeImageUrl.isNotEmpty
-            ? incoming.largeImageUrl
-            : existing.largeImageUrl,
-        imageVariants: incoming.imageVariants.isNotEmpty
-            ? incoming.imageVariants
-            : existing.imageVariants,
         prices: incoming.prices.isNotEmpty ? incoming.prices : existing.prices,
         stockOnHand: incoming.stockOnHand,
         isPurchasable: incoming.isPurchasable,
@@ -233,14 +262,65 @@ class SearchService {
     CacheService.saveProductDb(_db);
   }
 
-  /// Hydrate live price/stock for a product (call when displaying)
+  /// Hydrate live data for a product. Skips API call if data is fresh.
+  /// - Price/stock: refreshed if older than 5 minutes
+  /// - All other fields: refreshed if older than 24 hours
   static Future<Product> hydrate(Product p, {String? storeNo}) async {
+    final now = DateTime.now();
+    final priceStale = p.lastPriceRefresh == null ||
+        now.difference(p.lastPriceRefresh!).inMinutes >= 5;
+    final detailStale = p.lastDetailRefresh == null ||
+        now.difference(p.lastDetailRefresh!).inHours >= 24;
+
+    if (!priceStale && !detailStale) return p; // fully fresh
+
     final live = await ApiService.getProduct(p.stockcode, storeNo: storeNo);
-    if (live != null) {
-      _cacheProduct(live); // upsert with history tracking
-      return _db[p.stockcode]!;
-    }
-    return p;
+    if (live == null) return p;
+
+    // Merge: only overwrite fields that are stale
+    final merged = p.copyWith(
+      stockOnHand: priceStale ? live.stockOnHand : null,
+    );
+
+    // Update the in-memory DB with the merged product
+    // For simplicity, just replace with live + preserve timestamps
+    final updated = Product(
+      stockcode: live.stockcode,
+      title: detailStale ? live.title : p.title,
+      brand: detailStale ? live.brand : p.brand,
+      description: detailStale ? live.description : p.description,
+      richDescription: detailStale ? live.richDescription : p.richDescription,
+      packageSize: detailStale ? live.packageSize : p.packageSize,
+      alcoholVolume: detailStale ? live.alcoholVolume : p.alcoholVolume,
+      varietal: detailStale ? live.varietal : p.varietal,
+      region: detailStale ? live.region : p.region,
+      state: detailStale ? live.state : p.state,
+      country: detailStale ? live.country : p.country,
+      vintage: detailStale ? live.vintage : p.vintage,
+      closure: detailStale ? live.closure : p.closure,
+      standardDrinks: detailStale ? live.standardDrinks : p.standardDrinks,
+      wineBody: detailStale ? live.wineBody : p.wineBody,
+      wineSweetness: detailStale ? live.wineSweetness : p.wineSweetness,
+      averageRating: detailStale ? live.averageRating : p.averageRating,
+      totalReviewCount: detailStale ? live.totalReviewCount : p.totalReviewCount,
+      prices: priceStale ? live.prices : p.prices,
+      stockOnHand: priceStale ? live.stockOnHand : p.stockOnHand,
+      isPurchasable: priceStale ? live.isPurchasable : p.isPurchasable,
+      isOnSpecial: priceStale ? live.isOnSpecial : p.isOnSpecial,
+      isMemberSpecial: priceStale ? live.isMemberSpecial : p.isMemberSpecial,
+      categories: detailStale ? live.categories : p.categories,
+      previousTitles: p.previousTitles,
+      priceHistory: p.priceHistory,
+      firstSeen: p.firstSeen,
+      lastPriceRefresh: priceStale ? now : p.lastPriceRefresh,
+      lastDetailRefresh: detailStale ? now : p.lastDetailRefresh,
+      productTags: detailStale ? live.productTags : p.productTags,
+      productSashes: detailStale ? live.productSashes : p.productSashes,
+      availablePackTypes: priceStale ? live.availablePackTypes : p.availablePackTypes,
+    );
+
+    _cacheProduct(updated);
+    return updated;
   }
 }
 

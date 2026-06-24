@@ -9,6 +9,7 @@ class CacheService {
   static const _storeNameKey = 'store_name';
   static const _postcodeKey = 'postcode';
   static const _darkModeKey = 'dark_mode';
+  static const _teamDiscountKey = 'team_discount';
   static const _cacheMaxAge = Duration(hours: 2);
 
   // --- Product Catalog Cache ---
@@ -90,6 +91,43 @@ class CacheService {
   static Future<void> setDarkMode(bool dark) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_darkModeKey, dark);
+  }
+
+  // --- Team Discount ---
+
+  /// Whether to show team discount prices (if eligible)
+  static Future<bool> getTeamDiscount() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_teamDiscountKey) ?? false;
+  }
+
+  static Future<void> setTeamDiscount(bool show) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_teamDiscountKey, show);
+  }
+
+  /// Check if a product has a team/member price from the API.
+  /// The API returns `promoprice` with `IsMemberOffer: true` for team-eligible products.
+  /// No calculation needed — the API gives the actual team price.
+  static bool hasTeamPrice(List<dynamic>? prices) {
+    if (prices == null) return false;
+    for (final p in prices) {
+      if (p is Map && p['isMemberOffer'] == true) return true;
+    }
+    return false;
+  }
+
+  /// Get the team/member price from API data.
+  /// Returns the promo price value, or null if not team-eligible.
+  static double? teamPrice(List<dynamic>? prices) {
+    if (prices == null) return null;
+    for (final p in prices) {
+      if (p is Map && p['isMemberOffer'] == true) {
+        final v = p['value'];
+        if (v is num && v > 0) return v.toDouble();
+      }
+    }
+    return null;
   }
 
   // --- Local Product Database ---
