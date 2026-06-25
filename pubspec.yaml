@@ -82,7 +82,6 @@ flutter:
     - assets/original-dans-head-logo.svg
     - assets/barcode_scanner.svg
     - assets/barcode-icon.svg
-    - assets/mydans.db.lz4
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
