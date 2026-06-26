@@ -217,6 +217,7 @@ class _SearchScreenState extends State<SearchScreen> {
     'alcohol_desc': 'ABV ↓',
     'stock_first': 'In Stock',
     'power_desc': 'Reviews',
+    'popularity': 'Popularity',
   };
   static const _sortIcons = {
     'price_asc': Icons.arrow_upward,
@@ -236,6 +237,7 @@ class _SearchScreenState extends State<SearchScreen> {
     'abv': ['alcohol_asc', 'alcohol_desc'],
     'stock': ['stock_first'],
     'reviews': ['power_desc'],
+    'popularity': ['popularity'],
   };
 
   void _cycleSort(String key) {
@@ -253,13 +255,45 @@ class _SearchScreenState extends State<SearchScreen> {
           _sortMode = cycle[idx + 1];
         }
       }
-      // If filters active & no text, re-query DB with new sort
-      if (_controller.text.trim().isEmpty && _filters.isActive) {
-        _search();
-      } else {
-        _applyFiltersAndSort();
-      }
     });
+    // Popularity: fetch server ordering
+    if (_sortMode == 'popularity' && _controller.text.trim().isNotEmpty) {
+      _fetchPopularityOrder();
+    } else if (_controller.text.trim().isEmpty && _filters.isActive) {
+      _search();
+    } else {
+      _applyFiltersAndSort();
+    }
+  }
+
+  Future<void> _fetchPopularityOrder() async {
+    final query = _controller.text.trim();
+    if (query.isEmpty) return;
+    setState(() => _loading = true);
+    try {
+      final result = await ApiService.searchCompare(
+        query: query,
+        localCount: _results.length,
+        staleIds: _results.map((p) => p.stockcode).toList(),
+      );
+      if (result != null && mounted) {
+        final order = List<String>.from(result['order'] ?? []);
+        final orderMap = <String, int>{};
+        for (var i = 0; i < order.length; i++) {
+          orderMap[order[i]] = i;
+        }
+        setState(() {
+          _results.sort((a, b) {
+            final ai = orderMap[a.stockcode] ?? 999999;
+            final bi = orderMap[b.stockcode] ?? 999999;
+            return ai.compareTo(bi);
+          });
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   bool _isSortActive(String key) {
@@ -1007,6 +1041,7 @@ class _SearchScreenState extends State<SearchScreen> {
                       _sortChip('ABV', 'abv'),
                       _sortChip('In Stock', 'stock'),
                       _sortChip('Reviews', 'reviews'),
+                      _sortChip('Popularity', 'popularity'),
                     ],
                   ),
                 ),
