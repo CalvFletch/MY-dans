@@ -237,32 +237,11 @@ class ApiService {
   static Future<List<Product>> webSearch(String query) async {
     try {
       http.Response response;
-      if (proxyBase != null) {
-        // Route through PC proxy (VPN interface)
-        final proxyUrl = Uri.parse(
-          '$proxyBase/search',
-        ).replace(queryParameters: {'q': query});
-        response = await http
-            .get(proxyUrl)
-            .timeout(const Duration(seconds: 15));
-        print('[PROXY] Search "$query" → ${response.statusCode}');
-      } else {
-        response = await http
-            .post(
-              Uri.parse('$_base/search'),
-              headers: {'Content-Type': 'application/json'},
-              body: json.encode({
-                'Filters': '',
-                'SearchTerm': query,
-                'PageSize': '20',
-                'PageNumber': '1',
-                'SortType': 'Relevance',
-                'Location': '',
-                'PageUrl': '/search?searchTerm=${Uri.encodeComponent(query)}',
-              }),
-            )
-            .timeout(const Duration(seconds: 8));
-      }
+      // Use server API (routes through Cloudflare tunnel in prod)
+      response = await http.get(
+        Uri.parse('$_base/api/search').replace(queryParameters: {'q': query}),
+      ).timeout(const Duration(seconds: 15));
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final products = data['Products'] as List<dynamic>? ?? [];
@@ -477,8 +456,8 @@ class ApiService {
     return null;
   }
 
-  /// Get product detail (for fetching missing/refreshed products).
-  static Future<Product?> getProduct(String code) async {
+  /// Get product detail (for fetching missing/refreshed products via compare).
+  static Future<Product?> fetchProduct(String code) async {
     try {
       final r = await http.get(Uri.parse('$_base/api/product/$code'));
       if (r.statusCode == 200) {
