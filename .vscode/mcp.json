@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "context-mode": {
+      "type": "stdio",
+      "command": "C:\\Users\\CIsaa\\.npm-global\\context-mode.cmd",
+      "env": {
+        "CONTEXT_MODE_PLATFORM": "vscode-copilot"
+      }
+    }
+  }
+}
