@@ -7,12 +7,11 @@ import 'search_service.dart';
 
 class ApiService {
   // All DM API calls go through our server — the key never leaves the backend.
-  static const _serverBase = 'http://192.168.1.209:8080';
+  static const _serverBase = 'http://192.168.1.108:8000';
+  static const _prodBase = 'https://mydans.calvfletch.dev';
 
-  /// Override server base (e.g. for production URL).
-  static String? proxyBase;
-
-  static String get _base => proxyBase ?? _serverBase;
+  static bool _useProd = false;
+  static String get _base => _useProd ? _prodBase : _serverBase;
 
   // In-memory catalog
   static final List<Product> _catalog = [];
@@ -388,5 +387,113 @@ class ApiService {
     } catch (_) {
       return null;
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Auth
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Register and get a basic API token. Everyone gets one automatically.
+  static Future<String?> register() async {
+    try {
+      final r = await http.post(Uri.parse('$_base/api/auth/register'));
+      if (r.statusCode == 201) {
+        final data = json.decode(r.body);
+        final token = data['token'] as String;
+        await CacheService.setToken(token);
+        await CacheService.setTokenTier(data['tier'] ?? 'basic');
+        return token;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Request advanced access upgrade. Requires store details.
+  static Future<Map<String, dynamic>?> requestUpgrade({
+    required String storeNumber,
+    required String name,
+    required String employeeId,
+    required String passphrase,
+  }) async {
+    try {
+      final r = await http.post(
+        Uri.parse('$_base/api/auth/request'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'store_number': storeNumber,
+          'name': name,
+          'employee_id': employeeId,
+          'passphrase': passphrase,
+        }),
+      );
+      if (r.statusCode == 201) {
+        return json.decode(r.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Poll request status until approved/rejected.
+  static Future<String?> checkRequestStatus(String requestId) async {
+    try {
+      final r = await http.get(Uri.parse('$_base/api/auth/status/$requestId'));
+      if (r.statusCode == 200) {
+        final data = json.decode(r.body);
+        if (data['status'] == 'approved' && data['token'] != null) {
+          await CacheService.setToken(data['token'] as String);
+          await CacheService.setTokenTier('advanced');
+          return 'approved';
+        }
+        return data['status'] as String?;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Search Compare (local-first workflow)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Client sends local search results → server returns ordering + missing + refreshed.
+  static Future<Map<String, dynamic>?> searchCompare({
+    required String query,
+    required int localCount,
+    required List<String> staleIds,
+  }) async {
+    try {
+      final r = await http.post(
+        Uri.parse('$_base/api/search/compare'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'query': query,
+          'local_count': localCount,
+          'stale_ids': staleIds,
+        }),
+      );
+      if (r.statusCode == 200) {
+        return json.decode(r.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Get product detail (for fetching missing/refreshed products).
+  static Future<Product?> getProduct(String code) async {
+    try {
+      final r = await http.get(Uri.parse('$_base/api/product/$code'));
+      if (r.statusCode == 200) {
+        return Product.fromJson(json.decode(r.body) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Get current auth token from cache.
+  static Future<String?> getToken() => CacheService.getToken();
+
+  /// Get current tier.
+  static Future<String> getTier() async {
+    final t = await CacheService.getTokenTier();
+    return t ?? 'basic';
   }
 }

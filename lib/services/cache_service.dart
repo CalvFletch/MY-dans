@@ -212,4 +212,40 @@ class CacheService {
       DateTime.now().millisecondsSinceEpoch,
     );
   }
+
+  // ═══════════════ Auth Token ═══════════════
+
+  static const _tokenKey = 'api_token';
+  static const _tierKey = 'api_tier';
+  static const _requestIdKey = 'auth_request_id';
+
+  static Future<String?> getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_tokenKey);
+  }
+
+  static Future<void> setToken(String token) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, token);
+  }
+
+  static Future<String?> getTokenTier() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_tierKey);
+  }
+
+  static Future<void> setTokenTier(String tier) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tierKey, tier);
+  }
+
+  static Future<String?> getRequestId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_requestIdKey);
+  }
+
+  static Future<void> setRequestId(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_requestIdKey, id);
+  }
 }

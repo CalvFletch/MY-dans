@@ -36,13 +36,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _syncHour = 2;
   bool _statsLoaded = false;
 
+  // Auth state
+  String? _token;
+  String _tier = 'basic';
+  final _storeNoCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  final _empIdCtrl = TextEditingController();
+  final _passphraseCtrl = TextEditingController();
+  String? _requestId;
+  bool _requesting = false;
+
   @override
   void initState() {
     super.initState();
     _loadStore();
     _loadStats();
     _loadSyncSettings();
+    _loadAuth();
     _searchController.addListener(_onSearchChanged);
+  }
+
+  Future<void> _loadAuth() async {
+    final t = await ApiService.getToken();
+    final tier = await ApiService.getTier();
+    if (mounted) setState(() { _token = t; _tier = tier; });
   }
 
   Future<void> _loadStats() async {
@@ -155,6 +172,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _section('Store', Icons.store),
           const SizedBox(height: 6),
           _storeCard(),
+          const SizedBox(height: 20),
+          _section('Account', Icons.person),
+          const SizedBox(height: 6),
+          _authCard(),
           const SizedBox(height: 20),
           _section('Appearance', Icons.palette),
           const SizedBox(height: 6),
@@ -298,6 +319,103 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ],
     );
+  }
+
+  // ── Auth ───────────────────────────────────
+
+  Widget _authCard() {
+    if (_token == null) {
+      return _card(children: [
+        Row(children: [
+          const Icon(Icons.lock_outline, color: AppColors.primary, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('API Access', style: TextStyle(fontWeight: FontWeight.w600)),
+            Text('Register to get popularity ordering', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+          ])),
+          ElevatedButton(onPressed: _register, child: const Text('Register')),
+        ]),
+      ]);
+    }
+    if (_tier == 'basic') {
+      return _card(children: [
+        Row(children: [
+          Icon(Icons.person_outline, color: Colors.orange[400], size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Basic Access', style: TextStyle(fontWeight: FontWeight.w600)),
+            Text('Request upgrade for price history & scores', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+          ])),
+        ]),
+        if (_requestId != null)
+          Padding(padding: const EdgeInsets.only(top: 8), child: Text('Request pending: $_requestId', style: TextStyle(color: Colors.orange[400], fontSize: 11))),
+        if (_requestId == null) ...[
+          const Divider(height: 20),
+          TextField(controller: _storeNoCtrl, decoration: const InputDecoration(labelText: 'Store Number', isDense: true)),
+          TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: 'Full Name', isDense: true)),
+          TextField(controller: _empIdCtrl, decoration: const InputDecoration(labelText: 'Employee ID', isDense: true)),
+          TextField(controller: _passphraseCtrl, obscureText: true, decoration: const InputDecoration(labelText: 'Passphrase', isDense: true)),
+          const SizedBox(height: 10),
+          SizedBox(width: double.infinity, child: ElevatedButton(
+            onPressed: _requesting ? null : _requestUpgrade,
+            child: _requesting ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Request Advanced Access'),
+          )),
+        ],
+      ]);
+    }
+    // Advanced tier
+    return _card(children: [
+      Row(children: [
+        const Icon(Icons.verified, color: AppColors.primary, size: 20),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Advanced Access', style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.primary)),
+          Text('Price history & popularity unlocked', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+        ])),
+      ]),
+    ]);
+  }
+
+  Future<void> _register() async {
+    final token = await ApiService.register();
+    if (mounted) setState(() { _token = token; _tier = 'basic'; });
+  }
+
+  Future<void> _requestUpgrade() async {
+    if (_storeNoCtrl.text.isEmpty || _nameCtrl.text.isEmpty || _empIdCtrl.text.isEmpty || _passphraseCtrl.text.isEmpty) return;
+    setState(() => _requesting = true);
+    final result = await ApiService.requestUpgrade(
+      storeNumber: _storeNoCtrl.text.trim(),
+      name: _nameCtrl.text.trim(),
+      employeeId: _empIdCtrl.text.trim(),
+      passphrase: _passphraseCtrl.text.trim(),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _requestId = result['request_id'] as String?;
+        _requesting = false;
+      });
+      // Poll for approval
+      _pollRequest();
+    } else {
+      if (mounted) setState(() => _requesting = false);
+    }
+  }
+
+  Future<void> _pollRequest() async {
+    if (_requestId == null) return;
+    for (var i = 0; i < 30; i++) {
+      await Future.delayed(const Duration(seconds: 5));
+      final status = await ApiService.checkRequestStatus(_requestId!);
+      if (status == 'approved' && mounted) {
+        setState(() { _tier = 'advanced'; _requestId = null; });
+        return;
+      }
+      if (status == 'rejected' && mounted) {
+        setState(() => _requestId = null);
+        return;
+      }
+    }
   }
 
   // ── Appearance ─────────────────────────────
