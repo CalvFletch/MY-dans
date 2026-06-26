@@ -6,19 +6,13 @@ import 'cache_service.dart';
 import 'search_service.dart';
 
 class ApiService {
-  static const _webBase = 'https://api.danmurphys.com.au/apis/ui';
-  static const _mobileBase = 'https://apiservices.danmurphys.com.au/cmpt';
-  static const _key = 'REDACTED3b914654a250e79d62250776';
-  static const _ua = 'DanMurphy/10.1.1';
+  // All DM API calls go through our server — the key never leaves the backend.
+  static const _serverBase = 'http://192.168.1.209:8080';
 
-  /// Set to your PC's local IP to proxy API calls through the VPN
-  /// e.g. 'http://192.168.1.209:8080'
+  /// Override server base (e.g. for production URL).
   static String? proxyBase;
 
-  static final Map<String, String> _headers = {
-    'Ocp-Apim-Subscription-Key': _key,
-    'User-Agent': _ua,
-  };
+  static String get _base => proxyBase ?? _serverBase;
 
   // In-memory catalog
   static final List<Product> _catalog = [];
@@ -47,8 +41,8 @@ class ApiService {
     try {
       for (var page = 1; page <= 77; page++) {
         final response = await http.post(
-          Uri.parse('$_mobileBase/api/v2/AdvertisedOffers/Products'),
-          headers: {..._headers, 'Content-Type': 'application/json'},
+          Uri.parse('$_base/api/catalog/offers'),
+          headers: {'Content-Type': 'application/json'},
           body: json.encode({'PageNumber': page, 'PageSize': 50}),
         );
         if (response.statusCode != 200) {
@@ -150,9 +144,9 @@ class ApiService {
   }) async {
     try {
       final uri = storeNo != null && storeNo.isNotEmpty
-          ? '$_webBase/Product/$stockcode?StoreNo=$storeNo'
-          : '$_webBase/Product/$stockcode';
-      final response = await http.get(Uri.parse(uri), headers: _headers);
+          ? '$_base/product/$stockcode?store=$storeNo'
+          : '$_base/product/$stockcode';
+      final response = await http.get(Uri.parse(uri));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final products = data['Products'] as List<dynamic>?;
@@ -173,10 +167,7 @@ class ApiService {
   ) async {
     try {
       final response = await http.get(
-        Uri.parse(
-          '$_webBase/Product/$stockcode/DeliveryAvailabilities?storeNo=$storeNo',
-        ),
-        headers: _headers,
+        Uri.parse('$_base/product/$stockcode/delivery?store=$storeNo'),
       );
       if (response.statusCode == 200) {
         return json.decode(response.body) as Map<String, dynamic>;
@@ -259,8 +250,8 @@ class ApiService {
       } else {
         response = await http
             .post(
-              Uri.parse('$_webBase/Search/products'),
-              headers: {..._headers, 'Content-Type': 'application/json'},
+              Uri.parse('$_base/search'),
+              headers: {'Content-Type': 'application/json'},
               body: json.encode({
                 'Filters': '',
                 'SearchTerm': query,
@@ -321,10 +312,8 @@ class ApiService {
   /// Search stores by postcode or suburb
   static Future<List<Map<String, dynamic>>> searchStores(String query) async {
     try {
-      final uri = Uri.parse(
-        '$_webBase/StoreLocator/Stores/danmurphys?postcode=$query',
-      );
-      final response = await http.get(uri, headers: _headers);
+      final uri = Uri.parse('$_base/stores/search?postcode=$query');
+      final response = await http.get(uri);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final stores = data['Stores'] as List<dynamic>? ?? [];
@@ -341,9 +330,9 @@ class ApiService {
   ) async {
     try {
       final uri = Uri.parse(
-        '$_webBase/StoreLocator/Stores/NearbyStock?PostCode=$postcode&StockCode=$stockcode',
+        '$_base/stores/nearby?postcode=$postcode&stockcode=$stockcode',
       );
-      final response = await http.get(uri, headers: _headers);
+      final response = await http.get(uri);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return (data['StoreStockDetails'] as List<dynamic>?)
@@ -384,8 +373,8 @@ class ApiService {
   }) async {
     try {
       final response = await http.post(
-        Uri.parse('$_mobileBase/api/v1/Catalog/Product/CustomerReviews'),
-        headers: {..._headers, 'Content-Type': 'application/json'},
+        Uri.parse('$_base/reviews'),
+        headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'productCode': productCode,
           'page': page,

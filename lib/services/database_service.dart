@@ -47,6 +47,12 @@ class DatabaseService {
           decompressedSize: origSize,
         );
         await File(dbFile).writeAsBytes(decompressed);
+        // Stamp user_version so openDatabase doesn't trigger onCreate/onUpgrade
+        try {
+          final fixDb = await openDatabase(dbFile);
+          await fixDb.execute('PRAGMA user_version = 5');
+          await fixDb.close();
+        } catch (_) {}
         print('[SQLite] Copied pre-built DB from assets (LZ4)');
       } catch (e) {
         print('[SQLite] No pre-built DB: $e');
@@ -118,9 +124,14 @@ class DatabaseService {
       final dbDir = await getDatabasesPath();
       final dbFile = p.join(dbDir, 'mydans.db');
 
-      // Close current DB, replace, reopen
+      // Close current DB, replace, stamp version, reopen
       await _db?.close();
       await File(dbFile).writeAsBytes(decompressed);
+      try {
+        final fixDb = await openDatabase(dbFile);
+        await fixDb.execute('PRAGMA user_version = 5');
+        await fixDb.close();
+      } catch (_) {}
       await _open();
       await prefs.setString('db_version', version);
 

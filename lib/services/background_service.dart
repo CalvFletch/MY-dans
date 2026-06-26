@@ -30,7 +30,7 @@ class BackgroundUpdater {
         return false;
       }
 
-      print('[SYNC] Running nightly catalog sync (${syncHour}:00)');
+      print('[SYNC] Running nightly catalog sync ($syncHour:00)');
       final updated = await DatabaseService.instance.checkRemoteDb();
       if (updated) {
         await CacheService.setLastSync(now);

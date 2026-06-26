@@ -21,3 +21,10 @@
 # General
 -keepattributes *Annotation*
 -keepattributes SourceFile,LineNumberTable
+
+# Suppress Play Core missing class warnings (not using deferred components)
+-dontwarn com.google.android.play.core.**
+
+# WorkManager (R8 was stripping WorkDatabase_Impl constructor)
+-keep class androidx.work.** { *; }
+-dontwarn androidx.work.**

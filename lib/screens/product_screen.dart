@@ -278,7 +278,7 @@ class _ProductScreenState extends State<ProductScreen> {
                               imageUrl: _imgs[i],
                               fit: BoxFit.contain,
                               memCacheWidth: 800,
-                              placeholder: (_, __) => const Center(
+                              placeholder: (_, _) => const Center(
                                 child: Icon(
                                   Icons.wine_bar,
                                   size: 48,
@@ -342,7 +342,7 @@ class _ProductScreenState extends State<ProductScreen> {
                               height: 44,
                               width: 44,
                               fit: BoxFit.contain,
-                              placeholder: (_, __) =>
+                              placeholder: (_, _) =>
                                   const SizedBox(width: 44, height: 44),
                               errorWidget: (_, _, _) => const SizedBox.shrink(),
                             ),
@@ -418,11 +418,12 @@ class _ProductScreenState extends State<ProductScreen> {
                     ),
                     const SizedBox(width: 8),
                     _ActionChip(
-                      child: const Icon(Icons.search, size: 18),
                       onTap: _openGoogle,
+                      child: const Icon(Icons.search, size: 18),
                     ),
                     const SizedBox(width: 6),
                     _ActionChip(
+                      onTap: _openDans,
                       child: SvgPicture.network(
                         'https://www.danmurphys.com.au/assets/images/brands/dans-mobile-header-logo.svg',
                         height: 16,
@@ -433,7 +434,6 @@ class _ProductScreenState extends State<ProductScreen> {
                           BlendMode.srcIn,
                         ),
                       ),
-                      onTap: _openDans,
                     ),
                   ],
                 ),

@@ -6,17 +6,16 @@ import '../main.dart';
 import '../services/api_service.dart';
 import '../services/cache_service.dart';
 import '../services/database_service.dart';
-import '../services/background_service.dart';
 import '../services/sync_service.dart';
 
 class SettingsScreen extends StatefulWidget {
-  final bool darkMode;
-  final ValueChanged<bool> onToggleDarkMode;
+  final String themeMode;
+  final ValueChanged<String> onThemeModeChanged;
 
   const SettingsScreen({
     super.key,
-    required this.darkMode,
-    required this.onToggleDarkMode,
+    required this.themeMode,
+    required this.onThemeModeChanged,
   });
 
   @override
@@ -25,28 +24,22 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _searchController = TextEditingController();
-  final _thresholdController = TextEditingController();
   String _storeId = '';
   String _storeName = '';
   List<Map<String, dynamic>> _stores = [];
   bool _loading = false;
   Timer? _debounce;
-  int _reviewThreshold = 100;
-  DateTime? _lastDailyRun;
   bool _teamDiscount = false;
-  bool _running = false;
-  double? _dailyProgress;
-  int _estimatedCount = 0;
   Map<String, int> _catCounts = {};
   int _totalProducts = 0;
   int _inStock = 0;
-  int _syncHour = 2; // default 2am AWST
+  int _syncHour = 2;
+  bool _statsLoaded = false;
 
   @override
   void initState() {
     super.initState();
     _loadStore();
-    _loadDailyInfo();
     _loadStats();
     _loadSyncSettings();
     _searchController.addListener(_onSearchChanged);
@@ -70,53 +63,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       total += row['c'] as int;
     }
     if (mounted) {
+      // Raw count from DB (includes products with empty product_type)
+      final dbTotal = DatabaseService.instance.count;
       setState(() {
         _catCounts = counts;
-        _totalProducts = total;
+        _totalProducts = dbTotal > 0 ? dbTotal : total;
         _inStock = stock;
+        _statsLoaded = true;
       });
     }
-  }
-
-  Future<void> _loadDailyInfo() async {
-    final t = await BackgroundUpdater.getReviewThreshold();
-    final last = await BackgroundUpdater.getLastRun();
-    final count = await BackgroundUpdater.estimateProductCount(t);
-    _teamDiscount = await CacheService.getTeamDiscount();
-    setState(() {
-      _reviewThreshold = t;
-      _thresholdController.text = '$t';
-      _lastDailyRun = last;
-      _estimatedCount = count;
-    });
   }
 
   Future<void> _loadSyncSettings() async {
     final h = await CacheService.getSyncHour();
     if (mounted) setState(() => _syncHour = h);
-  }
-
-  Future<void> _runNow() async {
-    setState(() {
-      _running = true;
-      _dailyProgress = null;
-    });
-    try {
-      await BackgroundUpdater.checkAndRun(
-        force: true,
-        onProgress: (done, total) {
-          if (mounted) setState(() => _dailyProgress = done / total);
-        },
-      );
-      await _loadDailyInfo();
-    } finally {
-      if (mounted) {
-        setState(() {
-          _running = false;
-          _dailyProgress = null;
-        });
-      }
-    }
   }
 
   Future<void> _loadStore() async {
@@ -173,7 +133,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
-    _thresholdController.dispose();
     _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
     super.dispose();
@@ -183,6 +142,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Refresh stats if DB is ready but stats never loaded
+    if (!_statsLoaded && DatabaseService.instance.isReady) {
+      _loadStats();
+    }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), centerTitle: true),
@@ -196,10 +159,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _section('Appearance', Icons.palette),
           const SizedBox(height: 6),
           _appearanceCard(),
-          const SizedBox(height: 20),
-          _section('Daily Updater', Icons.sync),
-          const SizedBox(height: 6),
-          _updaterCard(),
           const SizedBox(height: 20),
           _section('Nightly Sync', Icons.cloud_sync),
           const SizedBox(height: 6),
@@ -328,7 +287,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               subtitle: Text(
-                '${s['Suburb'] ?? ''} ${s['State'] ?? ''} • ${s['Distance'] ?? '?'}km',
+                '${s['Suburb'] ?? ''} ${s['State'] ?? ''} \u2022 ${s['Distance'] ?? '?'}km',
                 style: const TextStyle(fontSize: 12),
               ),
               trailing: const Icon(Icons.chevron_right, size: 18),
@@ -344,19 +303,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Appearance ─────────────────────────────
 
   Widget _appearanceCard() {
+    final themeIcon = widget.themeMode == 'system'
+        ? Icons.settings_brightness
+        : widget.themeMode == 'dark'
+        ? Icons.dark_mode
+        : Icons.light_mode;
     return _card(
       children: [
-        SwitchListTile(
-          title: const Text('Dark Mode'),
-          secondary: Icon(
-            widget.darkMode ? Icons.dark_mode : Icons.light_mode,
-            color: AppColors.primary,
-          ),
-          value: widget.darkMode,
-          onChanged: widget.onToggleDarkMode,
-          contentPadding: EdgeInsets.zero,
-          visualDensity: VisualDensity.compact,
+        Row(
+          children: [
+            Icon(themeIcon, color: AppColors.primary, size: 20),
+            const SizedBox(width: 10),
+            const Text(
+              'Theme',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+            ),
+            const Spacer(),
+            DropdownButton<String>(
+              value: widget.themeMode,
+              underline: const SizedBox(),
+              items: const [
+                DropdownMenuItem(
+                  value: 'system',
+                  child: Text('System', style: TextStyle(fontSize: 14)),
+                ),
+                DropdownMenuItem(
+                  value: 'light',
+                  child: Text('Light', style: TextStyle(fontSize: 14)),
+                ),
+                DropdownMenuItem(
+                  value: 'dark',
+                  child: Text('Dark', style: TextStyle(fontSize: 14)),
+                ),
+              ],
+              onChanged: (v) => widget.onThemeModeChanged(v!),
+            ),
+          ],
         ),
+        const Divider(height: 24),
         SwitchListTile(
           title: const Text('Show Team Prices'),
           secondary: Icon(
@@ -374,102 +358,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ],
     );
   }
-
-  // ── Updater ────────────────────────────────
-
-  Widget _updaterCard() {
-    return _card(
-      children: [
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            const Text('Threshold: ', style: TextStyle(fontSize: 14)),
-            SizedBox(
-              width: 64,
-              child: TextField(
-                controller: _thresholdController,
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                onSubmitted: (v) async {
-                  final n = int.tryParse(v);
-                  if (n != null && n >= 5 && n <= 9999) {
-                    setState(() => _reviewThreshold = n);
-                    BackgroundUpdater.setReviewThreshold(n);
-                    final c = await BackgroundUpdater.estimateProductCount(n);
-                    setState(() => _estimatedCount = c);
-                  } else {
-                    _thresholdController.text = '$_reviewThreshold';
-                  }
-                },
-                decoration: const InputDecoration(
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(),
-                ),
-                style: const TextStyle(fontSize: 14),
-              ),
-            ),
-            const SizedBox(width: 6),
-            const Text('reviews', style: TextStyle(fontSize: 14)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '↳ $_estimatedCount daily',
-                style: TextStyle(color: Colors.grey[500], fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Text(
-              _lastDailyRun != null
-                  ? 'Last: ${_lastDailyRun!.toString().substring(0, 16)}'
-                  : 'Never run',
-              style: TextStyle(color: Colors.grey[400], fontSize: 12),
-            ),
-            const Spacer(),
-            IconButton(
-              onPressed: _running ? null : _runNow,
-              icon: _running
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppColors.primary,
-                      ),
-                    )
-                  : const Icon(Icons.sync, color: AppColors.primary),
-              tooltip: 'Check Now',
-              style: IconButton.styleFrom(
-                backgroundColor: AppColors.primary.withAlpha(30),
-              ),
-            ),
-          ],
-        ),
-        if (_dailyProgress != null) ...[
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: _dailyProgress,
-              minHeight: 6,
-              backgroundColor: Colors.grey[300],
-              color: AppColors.primary,
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  int get _totalNew =>
-      _catCounts.values.fold(0, (a, b) => a + b) > 0 ? 504 : 504; // from build
 
   Future<void> _exportDb() async {
     try {
@@ -508,7 +396,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       22: '10:00 PM AWST',
       23: '11:00 PM AWST',
     };
-
     return _card(
       children: [
         const Text(
@@ -523,19 +410,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Text('Sync at: ', style: TextStyle(fontSize: 14)),
             DropdownButton<int>(
               value: _syncHour,
-              items: labels.entries.map((e) {
-                return DropdownMenuItem(
-                  value: e.key,
-                  child: Text(e.value, style: const TextStyle(fontSize: 14)),
-                );
-              }).toList(),
+              items: labels.entries
+                  .map(
+                    (e) => DropdownMenuItem(
+                      value: e.key,
+                      child: Text(
+                        e.value,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+                  )
+                  .toList(),
               onChanged: (v) async {
                 if (v != null) {
                   setState(() => _syncHour = v);
                   await CacheService.setSyncHour(v);
-                  await SyncService.schedule(
-                    hour: v,
-                  ); // re-schedule background task
+                  await SyncService.schedule(hour: v);
                 }
               },
               underline: const SizedBox(),
@@ -545,9 +435,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 6),
         Text(
           _syncHour == -1
-              ? 'Sync only when you tap "Check Now" below.'
-              : 'Downloads latest catalog at ${labels[_syncHour] ?? '???'} — ~64MB. '
-                    'WiFi only, works in background (no need to open app).',
+              ? 'Sync only when you tap "Sync Now" below.'
+              : 'Downloads latest catalog — ~2.6MB diff or ~64MB full. WiFi only, works in background.',
           style: const TextStyle(fontSize: 11, color: Colors.grey),
         ),
         const SizedBox(height: 10),
@@ -558,6 +447,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onPressed: () async {
                 try {
                   final ok = await DatabaseService.instance.checkRemoteDb();
+                  await _loadStats();
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -596,7 +486,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     };
     return _card(
       children: [
-        // Summary row
         Row(
           children: [
             _statBox('Total', '$_totalProducts', AppColors.primary, isDark),
@@ -607,7 +496,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        // Category breakdown
         Text(
           'Categories',
           style: TextStyle(
@@ -671,7 +559,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Row(
           children: [
             Text(
-              'DB v5 • LZ4 • $_totalProducts products',
+              'DB v5 \u2022 LZ4 \u2022 $_totalProducts products',
               style: TextStyle(color: Colors.grey[400], fontSize: 11),
             ),
             const Spacer(),
@@ -703,16 +591,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Text(
               value,
               style: TextStyle(
-                fontSize: 20,
+                fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: color,
               ),
             ),
+            const SizedBox(height: 2),
             Text(
               label,
               style: TextStyle(
                 fontSize: 11,
-                color: isDark ? Colors.white60 : Colors.grey[600],
+                color: isDark ? Colors.white54 : Colors.grey[600],
               ),
             ),
           ],

@@ -2,7 +2,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'screens/search_screen.dart';
 import 'screens/settings_screen.dart';
-import 'services/api_service.dart';
 import 'services/cache_service.dart';
 import 'services/search_service.dart';
 import 'services/database_service.dart';
@@ -52,7 +51,7 @@ class MyDansApp extends StatefulWidget {
 }
 
 class _MyDansAppState extends State<MyDansApp> {
-  bool _darkMode = false;
+  String _themeMode = 'system'; // system, light, dark
   final int _catalogCount = 0;
 
   @override
@@ -62,13 +61,13 @@ class _MyDansAppState extends State<MyDansApp> {
   }
 
   Future<void> _loadTheme() async {
-    final dark = await CacheService.getDarkMode();
-    if (mounted) setState(() => _darkMode = dark);
+    final mode = await CacheService.getThemeMode();
+    if (mounted) setState(() => _themeMode = mode);
   }
 
-  void toggleDarkMode(bool dark) async {
-    setState(() => _darkMode = dark);
-    await CacheService.setDarkMode(dark);
+  void setThemeMode(String mode) async {
+    setState(() => _themeMode = mode);
+    await CacheService.setThemeMode(mode);
   }
 
   @override
@@ -78,11 +77,15 @@ class _MyDansAppState extends State<MyDansApp> {
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(Brightness.light),
       darkTheme: _buildTheme(Brightness.dark),
-      themeMode: _darkMode ? ThemeMode.dark : ThemeMode.light,
+      themeMode: _themeMode == 'dark'
+          ? ThemeMode.dark
+          : _themeMode == 'light'
+          ? ThemeMode.light
+          : ThemeMode.system,
       home: HomeScreen(
-        darkMode: _darkMode,
+        themeMode: _themeMode,
         catalogCount: _catalogCount,
-        onToggleDarkMode: toggleDarkMode,
+        onThemeModeChanged: setThemeMode,
       ),
     );
   }
@@ -115,15 +118,15 @@ class _MyDansAppState extends State<MyDansApp> {
 }
 
 class HomeScreen extends StatefulWidget {
-  final bool darkMode;
+  final String themeMode;
   final int catalogCount;
-  final ValueChanged<bool> onToggleDarkMode;
+  final ValueChanged<String> onThemeModeChanged;
 
   const HomeScreen({
     super.key,
-    required this.darkMode,
+    required this.themeMode,
     required this.catalogCount,
-    required this.onToggleDarkMode,
+    required this.onThemeModeChanged,
   });
 
   @override
@@ -138,8 +141,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final screens = [
       const SearchScreen(),
       SettingsScreen(
-        darkMode: widget.darkMode,
-        onToggleDarkMode: widget.onToggleDarkMode,
+        themeMode: widget.themeMode,
+        onThemeModeChanged: widget.onThemeModeChanged,
       ),
     ];
 

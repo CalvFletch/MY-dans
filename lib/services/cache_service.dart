@@ -86,14 +86,14 @@ class CacheService {
 
   // --- Theme ---
 
-  static Future<bool> getDarkMode() async {
+  static Future<String> getThemeMode() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_darkModeKey) ?? false;
+    return prefs.getString(_darkModeKey) ?? 'system';
   }
 
-  static Future<void> setDarkMode(bool dark) async {
+  static Future<void> setThemeMode(String mode) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_darkModeKey, dark);
+    await prefs.setString(_darkModeKey, mode);
   }
 
   // --- Team Discount ---

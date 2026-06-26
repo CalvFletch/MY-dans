@@ -57,7 +57,7 @@ class ProductCard extends StatelessWidget {
                       fit: BoxFit.contain,
                       memCacheWidth: 112,
                       memCacheHeight: 144,
-                      placeholder: (_, __) => Container(
+                      placeholder: (_, _) => Container(
                         color: Colors.white,
                         child: const Icon(
                           Icons.wine_bar,
